@@ -1449,7 +1449,6 @@ class OptimizeExtendedDynamicFactor():
         self.k_factors_max = k_factors_max
         self.factor_lag_max = factor_lag_max
         self.factor_order_max = factor_order_max
-        self.info_penalty_weight = kwargs.get('info_penalty_weight', 1)
                 
         # Error-related properties
         self.error_order = error_order
@@ -1469,19 +1468,19 @@ class OptimizeExtendedDynamicFactor():
         res_pca = PCA(endog, ncomp=k_factors) #standardize=False, demean=False, normalize=False)
         return res_pca.factors / np.sqrt(n), res_pca.loadings * np.sqrt(n)      # DFM factors (T x k), DFM factor loadings (n x k)
     
-    def _info_criterion(self, endog, k_factors, info_criterion):    # Bai & Ng (2002)
+    def _info_criterion(self, endog, k_factors, info_criterion, info_penalty_weight):    # Bai & Ng (2002)
         # Factor loadings (estimated via PCA)
         T, n = endog.shape
         factors, loadings = self._factor_loadings_estimate(endog, k_factors)
         error = endog - np.dot(factors, loadings.T)
         mean_squared_error_ = np.power(error, 2).mean()
         g1_ = (n + T) / (n * T) * np.log((n * T) / (n + T))
-        g2_ = (n + T) / (n * T) * np.log(min(np.sqrt(n), np.sqrt(T)) ** 2)
-        g3_ = np.log(min(np.sqrt(n), np.sqrt(T)) ** 2) / min(np.sqrt(n), np.sqrt(T)) ** 2
+        g2_ = (n + T) / (n * T) * np.log(min(n, T))
+        g3_ = np.log(min(n, T)) / min(n, T)
         g4_ = (n + T - k_factors) * np.log(n * T) / (n * T)
         
         # Compute information criteria
-        return np.log(mean_squared_error_) + self.info_penalty_weight * k_factors * [0, g1_, g2_, g3_, g4_][info_criterion]
+        return np.log(mean_squared_error_) + info_penalty_weight * k_factors * [0, g1_, g2_, g3_, g4_][info_criterion]
 
     def _compute_D_stat(self, cov_matrix, k, Dstat):        # Bai & Ng (2007)
         eigenvalues_, _ = np.linalg.eig(cov_matrix)
@@ -1491,7 +1490,7 @@ class OptimizeExtendedDynamicFactor():
         # Compute D statistics
         return ((eigenvalues_[r - k - 1] if Dstat == 1 else eigenvalues_[:r - k].sum()) / eigenvalues_.sum()) ** 0.5
             
-    def optimize(self, info_criterion=2, Dstat=2, delta=0.1, m=1, **kwargs):        
+    def optimize(self, info_criterion=2, info_penalty_weight=1, factor_ic='aic', Dstat=2, delta=0.1, m=1, **kwargs):        
         """
         Run optimizer for model parameters following Bai & Ng (2007)
 
@@ -1499,8 +1498,12 @@ class OptimizeExtendedDynamicFactor():
         ----------
         info_criterion : int
             The information criterion to use in Bai & Ng (2002)
+        info_penalty_weight : float
+            The penalty weight in the information criterion of Bai & Ng (2002)
+        factor_ic : string
+            The information criterion to use in optimizing factor evolution order
         Dstat : int
-            The type of D statistics to use in optimizing the number of dynamic factors
+            The type of D statistics to use in optimizing the number of dynamic factors in Bai & Ng (2007)
         delta : float
             The :math:`delta` used in optimizing the number of dynamic factors
         m : float
@@ -1515,27 +1518,28 @@ class OptimizeExtendedDynamicFactor():
         T, n = endog.shape
         
         # Determine optimal number of static factors (r)
-        static_factors_ = np.argmax([self._info_criterion(endog, r + 1, info_criterion) 
+        static_factors_ = np.argmin([self._info_criterion(endog, r + 1, info_criterion, info_penalty_weight) 
                                     for r in range(self.k_factors_max * min(1 + self.factor_lag_max, self.factor_order_max))]) + 1
         factors_ = self._factor_loadings_estimate(endog, static_factors_)[0]
         
         # Optimize factor order (p)
         if static_factors_ > 1:
-            var_model_ = VAR(factors_).fit(self.factor_order_max, trend='n')
+            var_model_ = VAR(factors_).fit(self.factor_order_max, trend='n', ic=factor_ic)
             self.factor_order = var_model_.k_ar
-            resid_cov_ = np.cov(var_model_.resid.T)
+            resid_cov_ = var_model_.resid.T.dot(var_model_.resid) / T
         else:
-            ar_order_ = ar_select_order(factors_, maxlag=self.factor_order_max).ar_lags
+            ar_order_ = ar_select_order(factors_, maxlag=self.factor_order_max, trend='n', ic=factor_ic).ar_lags
             self.factor_order = ar_order_[-1] if ar_order_ else 0
             ar_model_ = ARIMA(factors_, order=(self.factor_order,0,0), trend='n', enforce_stationarity=True).fit()
-            resid_cov_ = np.array([[np.cov(ar_model_.resid)]])
-            
+            resid_cov_ = np.array([[ar_model_.resid.T.dot(ar_model_.resid) / T]])
+
         # Optimize number of dynamic factors (q)
+        assert resid_cov_.shape == (static_factors_, static_factors_)
         if self.factor_order > 0 and self.factor_lag_max > 0:
-            self.k_factors = np.argmax([(self._compute_D_stat(resid_cov_, q + 1, Dstat) < m / T ** (0.5 - delta)) 
-                                        for q in range(min(static_factors_, self.factor_order, self.k_factors_max))]) + 1            
+            self.k_factors = np.min([q for q in range(1, min(static_factors_, self.factor_order, self.k_factors_max) + 1) 
+                                     if self._compute_D_stat(resid_cov_, q, Dstat) < m / min(n, T) ** (0.5 - delta)])           
         else:
-            self.k_factors = np.argmax([self._info_criterion(endog, q + 1, info_criterion) 
+            self.k_factors = np.argmin([self._info_criterion(endog, q + 1, info_criterion, info_penalty_weight) 
                                         for q in range(self.k_factors_max)]) + 1
             
         # Optimize factor lag (cap to factor order - 1) (s)
