@@ -59,6 +59,8 @@ class ExtendedDynamicFactor(MLEModel):
     enforce_stationarity : bool, optional
         Whether or not to transform the AR parameters to enforce stationarity
         in the autoregressive component of the model. Default is True.
+    loglike_penalty : float, optional
+        Penalty weight for regularized loglikelihood maximization.
     **kwargs
         Keyword arguments may be used to provide default values for state space
         matrices or for Kalman filtering options. See `Representation`, and
@@ -89,11 +91,12 @@ class ExtendedDynamicFactor(MLEModel):
     enforce_stationarity : bool, optional
         Whether or not to transform the AR parameters to enforce stationarity
         in the autoregressive component of the model. Default is True.
+    loglike_penalty : float, optional
+        Penalty weight for regularized loglikelihood maximization.
 
     Notes
     -----
-    The dynamic factor model considered here is in the so-called static form,
-    and is specified:
+    The dynamic factor model considered here is given by:
 
     .. math::
 
@@ -148,7 +151,7 @@ class ExtendedDynamicFactor(MLEModel):
 
     def __init__(self, endog, k_factors, factor_lag, factor_order, exog=None,
                  error_order=0, error_var=False, error_cov_type='diagonal',
-                 enforce_stationarity=True, **kwargs):
+                 enforce_stationarity=True, loglike_penalty=0, **kwargs):
 
         # Model properties
         self.enforce_stationarity = enforce_stationarity
@@ -169,6 +172,9 @@ class ExtendedDynamicFactor(MLEModel):
         # Note: at some point in the future might add state regression, as in
         # SARIMAX.
         self.mle_regression = self.k_exog > 0
+
+        # Loglikelihood penalty
+        self.loglike_penalty = loglike_penalty
 
         # We need to have an array or pandas at this point
         if not _is_using_pandas(endog, None):
@@ -1005,6 +1011,22 @@ class ExtendedDynamicFactor(MLEModel):
             self.ssm[self._idx_error_transition] = (
                 params[self._params_error_transition])
 
+    # Penalized loglikelihood for regularization
+    def loglikeobs(self, params, transformed=True, includes_fixed=False, 
+                   complex_step=False, **kwargs):
+        nobs = self.endog.shape[0]
+        burn = self.loglikelihood_burn
+
+        mask = np.hstack([np.zeros(burn), np.ones(nobs - burn)])
+        penalty = mask * self.loglike_penalty * np.sum(np.power(params, 2)) / (nobs - burn)
+        loglikeobs = super().loglikeobs(params=params, transformed=transformed, includes_fixed=includes_fixed, 
+                                        complex_step=complex_step, **kwargs)
+        
+        return loglikeobs - penalty 
+    
+    # Penalized loglikelihood for regularization
+    def loglike(self, params, *args, **kwargs):
+        return super().loglike(params, *args, **kwargs) - self.loglike_penalty * np.sum(np.power(params, 2))
 
 class ExtendedDynamicFactorResults(MLEResults):
     """
@@ -1053,7 +1075,10 @@ class ExtendedDynamicFactorResults(MLEResults):
             'error_cov_type': self.model.error_cov_type,
 
             # Other properties
-            'k_exog': self.model.k_exog
+            'k_exog': self.model.k_exog,
+            
+            # Loglikelihood penalty
+            'loglike_penalty': self.model.loglike_penalty
         })
 
         # Polynomials / coefficient matrices
@@ -1138,8 +1163,8 @@ class ExtendedDynamicFactorResults(MLEResults):
         coefficients_of_determination : ndarray
             A `k_endog` x `k_factors` array, where
             `coefficients_of_determination[i, j]` represents the :math:`R^2`
-            value from a regression of factor `j` and a constant on endogenous
-            variable `i`.
+            value from a regression of factor `j`, its `factor_lag` lagged values,
+            and a constant on endogenous variable `i`.
 
         Notes
         -----
@@ -1161,10 +1186,23 @@ class ExtendedDynamicFactorResults(MLEResults):
         coefficients = np.zeros((spec.k_endog, spec.k_factors))
         which = 'filtered' if self.smoothed_state is None else 'smoothed'
 
+        def lag_factors(exog, lags):
+            if isinstance(exog, pd.DataFrame):
+                return pd.concat([exog.shift(l).add_suffix(f'.L{l}') 
+                                  for l in range(lags + 1)], axis=1).iloc[lags:, :]
+            else:
+                exog = np.asarray(exog)
+                if exog.ndim == 1:
+                    exog = exog[:, None]
+                elif exog.ndim > 2:
+                    raise ValueError('Only implemented for 2-dimensional arrays')
+                return np.hstack([np.roll(exog, l) for l in range(lags + 1)])[lags:, :]
+
         for i in range(spec.k_factors):
-            exog = add_constant(self.factors[which][i])
+            exog = lag_factors(self.factors[which][i], spec.factor_lag)
+            exog = add_constant(exog)
             for j in range(spec.k_endog):
-                endog = self.filter_results.endog[j]
+                endog = self.filter_results.endog[j][spec.factor_lag:]
                 coefficients[j, i] = OLS(endog, exog).fit().rsquared
 
         return coefficients
@@ -1256,6 +1294,9 @@ class ExtendedDynamicFactorResults(MLEResults):
         if spec.error_order > 0:
             error_type = 'VAR' if spec.error_var else 'AR'
             model_name.append('%s(%d) errors' % (error_type, spec.error_order))
+
+        if spec.loglike_penalty != 0:
+            model_name.append('loglike_penalty=%#5.3f' % spec.loglike_penalty)
 
         summary = super(ExtendedDynamicFactorResults, self).summary(
             alpha=alpha, start=start, model_name=model_name,
