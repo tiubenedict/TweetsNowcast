@@ -15,7 +15,7 @@ class NowcastingPipeline:
         date = pd.to_datetime(date)
         return f'{date.year}Q{math.ceil(date.month/3)}'
 
-    def load_target(self, vintage, growth, quarterly, freq, target_release_lag=0, **kwargs):
+    def load_target(self, vintage, growth, quarterly, freq, target_release_lag=True, **kwargs):
         raise NotImplementedError
     
     def quarter_to_annual(self, vintage, nowcasts, **kwargs):
@@ -50,8 +50,8 @@ class NowcastingPipeline:
         self.prefix = self.__class__.__name__
         print(f'Running {self.prefix}')
 
-        annual_target = self.load_target(end + relativedelta(years=1), growth=True, quarterly=False, freq='Y', target_release_lag=0, **self.kwargs, **kwargs)
-        quarter_target = self.load_target(end + relativedelta(years=1), growth=True, quarterly=True, freq='Q', target_release_lag=0, **self.kwargs, **kwargs)
+        annual_target = self.load_target(end + relativedelta(years=1), growth=True, quarterly=False, freq='Y', target_release_lag=False, **self.kwargs, **kwargs)
+        quarter_target = self.load_target(end + relativedelta(years=1), growth=True, quarterly=True, freq='Q', target_release_lag=False, **self.kwargs, **kwargs)
 
         summary = []
         vintage_now = start
@@ -78,11 +78,14 @@ class NowcastingPipeline:
         return summary
 
 class NowcastingPH(NowcastingPipeline):
-    def load_target(self, vintage, growth=True, quarterly=True, freq='M', target_release_lag=26, **kwargs):
+    def load_target(self, vintage, target='GDP', growth=True, quarterly=True, freq='M', target_release_lag=True, **kwargs):
         vintage = pd.to_datetime(vintage)
-        df = pd.read_csv('data/GDP_2014USD.csv')[['date', 'PH']].rename(columns={'PH': 'target'}).dropna()
+        df = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='data')[['date', target]].rename(columns={target: 'target'}).dropna()
         df['date'] = pd.to_datetime(df['date']) + pd.offsets.MonthEnd(0)
         df = df.set_index('date')
+
+        meta = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='release')
+        target_release_lag = meta.set_index('Variable Name').to_dict('dict')['Lag'][target] if target_release_lag else 0
 
         if quarterly:
             df = df.resample('Q').sum()
@@ -161,11 +164,11 @@ class NowcastingPH(NowcastingPipeline):
 
         return tweets
 
-    def load_data(self, vintage, window=0, scaled=True, **kwargs):
+    def load_data(self, vintage, target='GDP', window=0, scaled=True, **kwargs):
         vintage = pd.to_datetime(vintage)
-        target = self.load_target(vintage, growth=True, quarterly=True, freq='M', **kwargs)
-        target_scaler = StandardScaler(with_mean=scaled, with_std=scaled).fit(target[['target']])
-        target['target'] = target_scaler.transform(target[['target']])
+        df = self.load_target(vintage, target, growth=True, quarterly=True, freq='M', **kwargs)
+        target_scaler = StandardScaler(with_mean=scaled, with_std=scaled).fit(df[['target']])
+        df['target'] = target_scaler.transform(df[['target']])
 
         tweets = self.load_tweets(vintage, freq='M', **kwargs).add_prefix('TWT.')
         tweets = tweets.reindex(pd.period_range(tweets.index[0], tweets.index[-1] + (3 - tweets.index[-1].month) % 3, 
@@ -180,8 +183,9 @@ class NowcastingPH(NowcastingPipeline):
                                                 freq=econ.index.freq, name=econ.index.name), fill_value=np.nan)
         econ = pd.concat([econ.shift(l).add_suffix(f'.L{l}') for l in range(3)], axis=1)
         econ = econ.loc[econ.index.month % 3 == 0, :]
+        econ = econ.drop(columns=[target, target + '_YoY'], errors='ignore')
 
-        data = [target] + ([tweets] if kwargs.get('with_tweets', True) else []) + ([econ] if kwargs.get('with_econ', True) else [])
+        data = [df] + ([tweets] if kwargs.get('with_tweets', True) else []) + ([econ] if kwargs.get('with_econ', True) else [])
         df = reduce(lambda left, right: pd.merge(left, right, on='date', how='outer', sort=True), data)
         df.index = pd.PeriodIndex(df.index, freq='Q')
         df = df.tail(math.ceil(window / 3)) if window > 0 else df
