@@ -7,7 +7,7 @@ Original Author: Chad Fulton (statsmodels)
 
 import numpy as np
 import pandas as pd
-from statsmodels.tsa.statespace.mlemodel import MLEModel, MLEResults, MLEResultsWrapper
+from statsmodels.tsa.statespace.mlemodel import MLEModel, MLEResults, MLEResultsWrapper, _handle_args
 from statsmodels.tsa.statespace.tools import (
     is_invertible, prepare_exog,
     constrain_stationary_univariate, unconstrain_stationary_univariate,
@@ -1017,8 +1017,9 @@ class ExtendedDynamicFactor(MLEModel):
         nobs = self.endog.shape[0]
         burn = self.loglikelihood_burn
 
-        mask = np.hstack([np.zeros(burn), np.ones(nobs - burn)])
-        penalty = mask * self.loglike_penalty * np.sum(np.power(params, 2)) / (nobs - burn)
+        mask = np.hstack([np.zeros(burn), np.ones(nobs - burn)]) / (nobs - burn)
+        params_ = self.handle_params(params, transformed=transformed, includes_fixed=includes_fixed)
+        penalty = mask * self.loglike_penalty * np.sum(np.power(params_, 2))
         loglikeobs = super().loglikeobs(params=params, transformed=transformed, includes_fixed=includes_fixed, 
                                         complex_step=complex_step, **kwargs)
         
@@ -1026,7 +1027,10 @@ class ExtendedDynamicFactor(MLEModel):
     
     # Penalized loglikelihood for regularization
     def loglike(self, params, *args, **kwargs):
-        return super().loglike(params, *args, **kwargs) - self.loglike_penalty * np.sum(np.power(params, 2))
+        transformed, includes_fixed, _, _ = _handle_args(ExtendedDynamicFactor._loglike_param_names, 
+                            ExtendedDynamicFactor._loglike_param_defaults, *args, **kwargs)
+        params_ = self.handle_params(params, transformed=transformed, includes_fixed=includes_fixed)
+        return super().loglike(params, *args, **kwargs) - self.loglike_penalty * np.sum(np.power(params_, 2))
 
 class ExtendedDynamicFactorResults(MLEResults):
     """
