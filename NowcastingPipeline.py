@@ -147,16 +147,15 @@ class NowcastingPH(NowcastingPipeline):
         
         return econ
 
-    def load_tweets(self, vintage, keywords=['PE'], metrics=['TBweight_cl2rt', 'VADERweight_cl2rt'], freq='M', **kwargs):
+    def load_tweets(self, vintage, kmpair, freq='M', **kwargs):
         vintage = pd.to_datetime(vintage)
-        tweets = pd.read_csv('data/PH_Tweets.csv')
+        tweets = pd.read_csv('data/PH_Tweets_v3.csv')
         tweets['date'] = pd.to_datetime(tweets['date']) + pd.offsets.MonthEnd(0)
         tweets = tweets.set_index('date')
 
-        keywords = keywords if len(keywords) > 0 else list(tweets['keyword'].unique())
-        metrics = metrics if len(metrics) > 0 else list(tweets.columns.drop(['keyword']))
-        tweets = tweets[metrics + ['keyword']]
-        data = [tweets[tweets['keyword'] == keyword].drop(columns=['keyword']).add_suffix(f'_{keyword}') for keyword in keywords]
+        if len(kmpair) == 0:
+            kmpair = {keyword: list(tweets.columns.drop('keyword')) for keyword in tweets['keyword'].unique()}
+        data = [tweets[tweets['keyword'] == keyword][kmpair[keyword]].add_suffix(f'_{keyword}') for keyword in kmpair.keys()]
         tweets = reduce(lambda left, right: pd.merge(left, right, on='date', how='outer', sort=True), data)
 
         tweets = tweets.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
