@@ -147,7 +147,7 @@ class NowcastingPH(NowcastingPipeline):
         
         return econ
 
-    def load_tweets(self, vintage, kmpair, freq='M', **kwargs):
+    def load_tweets(self, vintage, window, kmpair, freq='M', **kwargs):
         vintage = pd.to_datetime(vintage)
         tweets = pd.read_csv('data/PH_Tweets_v3.csv')
         tweets['date'] = pd.to_datetime(tweets['date']) + pd.offsets.MonthEnd(0)
@@ -158,7 +158,8 @@ class NowcastingPH(NowcastingPipeline):
         data = [tweets[tweets['keyword'] == keyword][kmpair[keyword]].add_suffix(f'_{keyword}') for keyword in kmpair.keys()]
         tweets = reduce(lambda left, right: pd.merge(left, right, on='date', how='outer', sort=True), data)
 
-        tweets = tweets.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
+        # tweets = tweets.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
+        tweets = tweets.loc[pd.to_datetime(vintage)  - relativedelta(months =  (pd.to_datetime(vintage).month - 1)%3 + window) : pd.to_datetime(vintage), :]
         tweets.index = pd.PeriodIndex(tweets.index, freq=freq)
 
         return tweets
@@ -169,7 +170,7 @@ class NowcastingPH(NowcastingPipeline):
         target_scaler = StandardScaler(with_mean=scaled, with_std=scaled).fit(df[['target']])
         df['target'] = target_scaler.transform(df[['target']])
 
-        tweets = self.load_tweets(vintage, freq='M', **kwargs).add_prefix('TWT.')
+        tweets = self.load_tweets(vintage, window, freq='M', **kwargs).add_prefix('TWT.')
         # tweets_scaler = MaxAbsScaler().fit(tweets)
         # tweets.loc[:,:] = tweets_scaler.transform(tweets)
         tweets = tweets.reindex(pd.period_range(tweets.index[0], tweets.index[-1] + (3 - tweets.index[-1].month) % 3, 
