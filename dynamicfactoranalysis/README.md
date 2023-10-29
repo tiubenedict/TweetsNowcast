@@ -2,6 +2,8 @@
 
 `dynamicfactoranalysis` is a Python package that provides tools for dynamic factor analysis.
 
+**Testing subtree merge**
+
 ## Main Features
 
 The current version contains the following implementation
