@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import datetime as dt
 from functools import reduce
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler #, MaxAbsScaler
 from dateutil.relativedelta import relativedelta
 
 class NowcastingPipeline:
@@ -171,6 +171,8 @@ class NowcastingPH(NowcastingPipeline):
         df['target'] = target_scaler.transform(df[['target']])
 
         tweets = self.load_tweets(vintage, freq='M', **kwargs).add_prefix('TWT.')
+        # tweets_scaler = MaxAbsScaler().fit(tweets)
+        # tweets.loc[:,:] = tweets_scaler.transform(tweets)
         tweets = tweets.reindex(pd.period_range(tweets.index[0], tweets.index[-1] + (3 - tweets.index[-1].month) % 3, 
                                                 freq=tweets.index.freq, name=tweets.index.name), fill_value=np.nan)
         tweets = pd.concat([tweets.shift(l).add_suffix(f'.L{l}') for l in range(3)], axis=1)
@@ -192,7 +194,7 @@ class NowcastingPH(NowcastingPipeline):
         df = df.dropna(axis=1, how='all')
         df = df.loc[:, ~df.T.duplicated(keep='first')]
 
-        return df, target_scaler, econ_scaler
+        return df, target_scaler, econ_scaler #, tweets_scaler 
     
     def rmse(self, y_pred, y_true):
         return np.sqrt(np.nanmean(np.power(y_true - y_pred, 2)))
