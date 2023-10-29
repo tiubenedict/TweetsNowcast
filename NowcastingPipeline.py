@@ -6,6 +6,7 @@ import datetime as dt
 from functools import reduce
 from sklearn.preprocessing import StandardScaler #, MaxAbsScaler
 from dateutil.relativedelta import relativedelta
+from sklearn.decomposition import PCA
 
 class NowcastingPipeline:
     def __init__(self, **kwargs):
@@ -161,6 +162,13 @@ class NowcastingPH(NowcastingPipeline):
         # tweets = tweets.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
         tweets = tweets.loc[pd.to_datetime(vintage)  - relativedelta(months =  (pd.to_datetime(vintage).month - 1)%3 + window) : pd.to_datetime(vintage), :]
         tweets.index = pd.PeriodIndex(tweets.index, freq=freq)
+        
+        ## PCA
+        pca = PCA(n_components=self.kwargs.get("n_components"))
+        scaler = StandardScaler()
+        tweets_std = scaler.fit_transform(tweets.values)
+        tweets_pca = pca.fit_transform(tweets_std)
+        tweets = pd.DataFrame(tweets_pca, index=tweets.index)
 
         return tweets
 
