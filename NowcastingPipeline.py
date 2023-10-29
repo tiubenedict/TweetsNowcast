@@ -226,6 +226,6 @@ class NowcastingPH(NowcastingPipeline):
             if not os.path.exists(f'Results'):
                 os.makedirs(f'Results')
             suffix = ('T' if kwargs.get('with_tweets', True) else '') + ('E' if kwargs.get('with_econ', True) else '')
-            summary.to_csv(f'Results/{self.prefix}_W{window}_{suffix}_summary.csv', index=False)
+            summary.to_csv(f'Results/{self.prefix}_W{window}_{self.kwargs.get("target")}_{suffix}_summary.csv', index=False)
 
         return summary
