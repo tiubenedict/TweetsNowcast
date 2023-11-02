@@ -164,11 +164,11 @@ class NowcastingPH(NowcastingPipeline):
         tweets.index = pd.PeriodIndex(tweets.index, freq=freq)
         
         ## PCA
-        pca = PCA(n_components=self.kwargs.get("n_components"))
-        scaler = StandardScaler()
-        tweets_std = scaler.fit_transform(tweets.values)
-        tweets_pca = pca.fit_transform(tweets_std)
-        tweets = pd.DataFrame(tweets_pca, index=tweets.index)
+        # pca = PCA(n_components=self.kwargs.get("n_components"))
+        # scaler = StandardScaler()
+        # tweets_std = scaler.fit_transform(tweets.values)
+        # tweets_pca = pca.fit_transform(tweets_std)
+        # tweets = pd.DataFrame(tweets_pca, index=tweets.index)
 
         return tweets
 
