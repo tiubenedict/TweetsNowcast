@@ -163,6 +163,14 @@ class NowcastingPH(NowcastingPipeline):
         tweets = tweets.loc[pd.to_datetime(vintage)  - relativedelta(months =  (pd.to_datetime(vintage).month - 1)%3 + window) : pd.to_datetime(vintage), :]
         tweets.index = pd.PeriodIndex(tweets.index, freq=freq)
         
+        cols = ['C_00_PE', 'L_00_PE', 'R_00_PE', 'C_00_PU+', 'L_00_PU+', 'R_00_PU+']
+        for col in cols:
+            if list(tweets.columns).count(col) > 1:
+                tweets[col] = tweets[col].clip(lower=1)
+                tweets[col] = tweets[col].pct_change()
+                # tweets[col] = scaler.fit_transform(tweets[col].values.reshape(-1, 1))
+        tweets.loc[:,:] = StandardScaler().fit_transform(tweets)
+        
         ## PCA
         # pca = PCA(n_components=self.kwargs.get("n_components"))
         # scaler = StandardScaler()
