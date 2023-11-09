@@ -150,7 +150,7 @@ class NowcastingPH(NowcastingPipeline):
 
     def load_tweets(self, vintage, window, kmpair, freq='M', **kwargs):
         vintage = pd.to_datetime(vintage)
-        tweets = pd.read_csv('data/PH_Tweets_v3.csv')
+        tweets = pd.read_csv('data/PH_Tweets_v4.csv')
         tweets['date'] = pd.to_datetime(tweets['date']) + pd.offsets.MonthEnd(0)
         tweets = tweets.set_index('date')
 
