@@ -8,6 +8,11 @@ from sklearn.preprocessing import StandardScaler #, MaxAbsScaler
 from dateutil.relativedelta import relativedelta
 from sklearn.decomposition import PCA
 
+import concurrent
+# For multiprocess to work in MacOS
+import multiprocessing as mp
+mp_fork = mp.get_context('fork')
+
 class NowcastingPipeline:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -47,7 +52,22 @@ class NowcastingPipeline:
         vintage = pd.to_datetime(vintage)
         print(f'Vintage: {vintage.date()} \t {error}')
     
-    def run(self, start, end, delta, window, **kwargs):
+    def process_vintage(self, vintage_now, window, annual_target, quarter_target, **kwargs):
+        annual = annual_target.loc[vintage_now, 'target']
+        quarter = quarter_target.loc[vintage_now, 'target']
+        try:
+            nowcasts, model_desc = self.fit_model(vintage_now, window, **kwargs)
+            nowcast_annual, nowcast_quarter = self.quarter_to_annual(vintage_now, nowcasts, **kwargs)
+            
+            res = [vintage_now, self.to_quarter(vintage_now), model_desc, nowcast_annual, annual, nowcast_quarter, quarter] + list(nowcasts)
+            print(f'Vintage: {vintage_now.date()} \t {model_desc}')
+                
+        except Exception as ex:
+            res = [vintage_now, self.to_quarter(vintage_now), 'No model', np.nan, annual, np.nan, quarter, np.nan, np.nan, np.nan, np.nan]
+            self.error_message(vintage_now, ex)
+        return res
+    
+    def run(self, start, end, delta, window, multiprocess,**kwargs):
         self.prefix = self.__class__.__name__
         print(f'Running {self.prefix}')
 
@@ -56,22 +76,17 @@ class NowcastingPipeline:
 
         summary = []
         vintage_now = start
-        while vintage_now < end:
-            annual = annual_target.loc[vintage_now, 'target']
-            quarter = quarter_target.loc[vintage_now, 'target']
-            
-            try:
-                nowcasts, model_desc = self.fit_model(vintage_now, window, **self.kwargs, **kwargs)
-                nowcast_annual, nowcast_quarter = self.quarter_to_annual(vintage_now, nowcasts, **self.kwargs, **kwargs)
-                
-                summary.append([vintage_now, self.to_quarter(vintage_now), model_desc, nowcast_annual, annual, nowcast_quarter, quarter] + list(nowcasts))
-                print(f'Vintage: {vintage_now.date()} \t {model_desc}')
-                    
-            except Exception as ex:
-                summary.append([vintage_now, self.to_quarter(vintage_now), 'No model', np.nan, annual, np.nan, quarter, np.nan, np.nan, np.nan, np.nan])                
-                self.error_message(vintage_now, ex)
-
-            vintage_now += delta
+        
+        if multiprocess > 1:
+            with concurrent.futures.ProcessPoolExecutor(mp_context=mp_fork, max_workers=multiprocess) as executor:
+                while vintage_now < end:
+                    summary.append(executor.submit(self.process_vintage, vintage_now, window, annual_target, quarter_target, **self.kwargs, **kwargs))
+                    vintage_now += delta            
+                summary = [process.result() for process in summary]
+        else:
+            while vintage_now < end:
+                summary.append(self.process_vintage(vintage_now, window, annual_target, quarter_target, **self.kwargs, **kwargs))
+                vintage_now += delta
 
         summary = pd.DataFrame(summary, columns=['date', 'Quarter', 'Model', 'Nowcast_A', 'Actual_A', 'Nowcast_Q', 'Actual_Q'] + [f'ForecastQ{q}' for q in range(1,5)])
         summary['date'] = pd.to_datetime(summary['date'])
@@ -234,10 +249,14 @@ class NowcastingPH(NowcastingPipeline):
                           [col for col in summary.columns if '_Q' in col] + [f'ForecastQ{q}' for q in range(1,5)]]
         return summary
 
+    def set_classname(self, **kwargs):
+        raise NotImplementedError
+    
     def run(self, start=dt.datetime(2017,1,31), end=dt.datetime(2023,1,1), delta=pd.offsets.MonthEnd(1), window=0, **kwargs):
         summary = super().run(start, end, delta, window, **kwargs)
         summary = self.process_summary(summary)
 
+        self.set_classname(**self.kwargs, **kwargs)
         if kwargs.get('save_aggregate', True):
             if not os.path.exists(f'Results'):
                 os.makedirs(f'Results')
