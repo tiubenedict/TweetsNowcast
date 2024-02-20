@@ -4,6 +4,7 @@
 
 - `PH_Tweets_v2.csv` adds filtering based on sentiment score
 - `PH_Tweets_v3.csv` adds filtering based on stance detected via Meta/BART-MNLI from HuggingFace
+- `PH_Tweets_v4.csv` is the simplified set of 16 tweet indicators
 
 ## Repo Subtrees
 
