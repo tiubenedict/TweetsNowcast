@@ -3,7 +3,6 @@ Dynamic Factor Model
 
 Authors: Brian Godwin Lim, Mark Kevin Ong Yiu
 Original Author: Chad Fulton (statsmodels)
-'VERSION 5'
 """
 
 import numpy as np
@@ -490,12 +489,7 @@ class DynamicFactorModel(MLEModel):
     @property
     def start_params(self):
         params = np.zeros(self.k_params, dtype=np.float64)
-
-        endog = self.endog.copy()
-        mask = ~np.any(np.isnan(endog), axis=1)
-        endog = endog[mask]
-        if self.k_exog > 0:
-            exog = self.exog[mask]
+        endog = pd.DataFrame(self.endog.copy()).interpolate().bfill().to_numpy()
 
         # 1. Factor loadings (estimated via PCA)
         if self.k_factors > 0:
@@ -1596,8 +1590,8 @@ class DynamicFactorModelOptimizer:
         verbose : bool, optional
             Flag indicating whether to print the fitted orders.
         """
-        endog = np.asarray(self.endog)
-        endog = endog[np.logical_not(np.isnan(endog).any(1))]
+        endog = pd.DataFrame(self.endog.copy()).interpolate().bfill().to_numpy()
+        exog = self.exog
         T, n = endog.shape
         
         # Determine optimal number of static factors (r)
@@ -1629,21 +1623,15 @@ class DynamicFactorModelOptimizer:
         self.factor_lag = max(0, min(round(static_factors_ / self.k_factors) - 1, self.factor_order - 1, self.factor_lag_max))
         
         # Optimize error order
-        mask = ~np.any(np.isnan(self.endog), axis=1)
-        endog = np.asarray(self.endog)[mask]
-        exog = np.asarray(self.exog)[mask] if self.exog else None
         res_pca = DynamicPCA(endog, ncomp=self.k_factors, M=self.factor_lag)
         lagged_factors = np.hstack([res_pca._shift(res_pca._factors, periods=p, pad=np.nan) 
                                     for p in np.arange(self.factor_lag + 1)])
-        res_ols = OLS(endog, lagged_factors, missing='drop').fit()
-        resid = res_pca._padna(res_ols.resid, before=self.factor_lag, after=self.factor_lag)
-        mask = ~np.any(np.isnan(resid), axis=1)
-        resid = resid[mask]
-        resid = OLS(resid, exog=exog[mask]).fit().resid if self.exog else resid
+        resid = OLS(endog, lagged_factors, missing='drop').fit().resid
+        resid = res_pca._padna(resid, before=self.factor_lag, after=self.factor_lag)
+        resid = OLS(resid, exog, missing='drop').fit().resid if exog else resid
 
         if self.error_var:
-            var_model_ = VAR(resid).fit(self.error_order_max, trend='n', ic=error_ic)
-            self.error_order = var_model_.k_ar
+            self.error_order = VAR(resid).fit(self.error_order_max, trend='n', ic=error_ic).k_ar
         else:
             self.error_order = 0
             for i in range(n):
