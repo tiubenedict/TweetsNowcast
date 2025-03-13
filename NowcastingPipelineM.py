@@ -131,17 +131,17 @@ class NowcastingPH_M(NowcastingPipeline):
     def load_target(self, vintage, target='GDP', growth=True, quarterly=True, freq='M', target_release_lag=True, **kwargs):
         vintage = pd.to_datetime(vintage)
         df = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='data')[['date', target]].rename(columns={target: 'target'}).dropna()
-        df['date'] = pd.to_datetime(df['date']) + pd.offsets.MonthEnd(0)
+        df['date'] = pd.to_datetime(df['date'], format="%m/%Y") + pd.offsets.MonthEnd(0)
         df = df.set_index('date')
 
         meta = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='release')
         target_release_lag = meta.set_index('Variable Name').to_dict('dict')['Lag'][target] if target_release_lag else 0
 
         if quarterly:
-            df = df.resample('Q').sum()
+            df = df.resample('QE').sum()
             df = 100 * (df / df.shift(4) - 1) if growth else df
         else:
-            df = df.resample('Y').sum()
+            df = df.resample('YE').sum()
             df = 100 * (df / df.shift(1) - 1) if growth else df
 
         df = df.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
@@ -153,7 +153,7 @@ class NowcastingPH_M(NowcastingPipeline):
     def load_econ_m(self, vintage, window, freq='M', extend=False, **kwargs):
         vintage = pd.to_datetime(vintage)
         econ_m = pd.read_excel('data/PH_Econ_M.xlsx', sheet_name='data')
-        econ_m['date'] = pd.to_datetime(econ_m['date']) + pd.offsets.MonthEnd(0)
+        econ_m['date'] = pd.to_datetime(econ_m['date'], format='%Y-%m-%d') + pd.offsets.MonthEnd(0)
         econ_m = econ_m.set_index('date')
 
         meta = pd.read_excel('data/PH_Econ_M.xlsx', sheet_name='release')
@@ -173,7 +173,7 @@ class NowcastingPH_M(NowcastingPipeline):
     def load_econ_q(self, vintage, window, freq='Q', extend=False, **kwargs):
         vintage = pd.to_datetime(vintage)
         econ_q = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='data')
-        econ_q['date'] = pd.to_datetime(econ_q['date']) + pd.offsets.MonthEnd(0)
+        econ_q['date'] = pd.to_datetime(econ_q['date'], format="%m/%Y") + pd.offsets.MonthEnd(0)
         econ_q = econ_q.set_index('date')
 
         meta = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='release')
@@ -203,7 +203,7 @@ class NowcastingPH_M(NowcastingPipeline):
     def load_tweets(self, vintage, window, kmpair, freq='M', extend=False, **kwargs):
         vintage = pd.to_datetime(vintage)
         tweets = pd.read_csv('data/PH_Tweets_v4.csv')
-        tweets['date'] = pd.to_datetime(tweets['date']) + pd.offsets.MonthEnd(0)
+        tweets['date'] = pd.to_datetime(tweets['date'], format='%Y-%m-%d') + pd.offsets.MonthEnd(0)
         tweets = tweets.set_index('date')
 
         if len(kmpair) == 0:
