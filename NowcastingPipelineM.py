@@ -185,8 +185,8 @@ class NowcastingPH_M(NowcastingPipeline):
         # econ_q = econ_q.loc[pd.to_datetime(vintage)  - relativedelta(months =  (pd.to_datetime(vintage).month - 1)%3 + window) : pd.to_datetime(vintage), :]
         for col in econ_q.columns:
             econ_q.loc[pd.to_datetime(vintage) - relativedelta(days=lag_dict[col]) :, col] = np.nan
-        econ_q.index = pd.PeriodIndex(econ_q.index, freq=freq)
         # econ_q = self.extend_data(econ_q, vintage, **kwargs) if extend else econ_q ### will error out when econ_q is empty, so commented out for now
+        econ_q.index = pd.PeriodIndex(econ_q.index, freq=freq)
         return econ_q
         
     def load_econ(self, vintage, window, freq='M', **kwargs):
@@ -211,7 +211,7 @@ class NowcastingPH_M(NowcastingPipeline):
         data = [tweets[tweets['keyword'] == keyword][kmpair[keyword]].add_suffix(f'_{keyword}') for keyword in kmpair.keys()]
         tweets = reduce(lambda left, right: pd.merge(left, right, on='date', how='outer', sort=True), data)
 
-        # tweets = tweets.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
+        tweets = tweets.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
         tweets = tweets.loc[pd.to_datetime(vintage)  - relativedelta(months =  (pd.to_datetime(vintage).month - 1)%3 + window) : pd.to_datetime(vintage), :]
         tweets = self.extend_data(tweets, vintage, **kwargs) if extend else tweets
         tweets.index = pd.PeriodIndex(tweets.index, freq=freq)
@@ -221,8 +221,6 @@ class NowcastingPH_M(NowcastingPipeline):
             if list(tweets.columns).count(col) > 1:
                 tweets[col] = tweets[col].clip(lower=1)
                 tweets[col] = tweets[col].pct_change()
-            # tweets[col] = scaler.fit_transform(tweets[col].values.reshape(-1, 1))
-        tweets.loc[:,:] = StandardScaler().fit_transform(tweets)
         return tweets
 
     def load_data(self, vintage, target='GDP', window=0, scaled=True, **kwargs):
