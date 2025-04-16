@@ -6,7 +6,7 @@ import datetime as dt
 from functools import reduce
 from sklearn.preprocessing import StandardScaler
 from dateutil.relativedelta import relativedelta
-import dynamicfactoranalysis as dfa
+import dynamicfactoranalysis.dynamicfactoranalysis as dfa
 
 import concurrent
 # For multiprocess to work in MacOS
