@@ -2,6 +2,7 @@ import pytorch_lightning as pl
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+import torch.optim as optim
 
 class PreAttnEncoder(nn.Module):
     """Pre-attention Encoder module"""
@@ -96,3 +97,23 @@ class STMFSeq2One(nn.Module):
         y_pred = self.ffn2(y_pred)
 
         return y_pred
+    
+class MTMFSeq2SeqLightning(pl.LightningModule):
+    def __init__(self, model, learning_rate=0.01):
+        super(MTMFSeq2SeqLightning, self).__init__()
+        self.model = model
+        self.learning_rate = learning_rate
+        self.criterion = torch.nn.MSELoss()
+
+    def forward(self, x_encoder_in, y_decoder_in):
+        return self.model(x_encoder_in, y_decoder_in)
+
+    def training_step(self, batch, batch_idx):
+        x_encoder_in, y_decoder_in, y_target = batch
+        y_pred = self(x_encoder_in, y_decoder_in)
+        loss = self.criterion(y_pred, y_target)
+        self.log("train_loss", loss, prog_bar=True)
+        return loss
+
+    def configure_optimizers(self):
+        return optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-5)
