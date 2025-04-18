@@ -163,3 +163,5 @@ cython_debug/
 
 # pytorch / lightning logs
 lightning_logs/
+tb_logs/
+checkpoints/
