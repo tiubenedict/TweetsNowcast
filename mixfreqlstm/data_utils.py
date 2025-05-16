@@ -14,6 +14,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from NowcastingPipelineM import NowcastingPH_M
 import dynamicfactoranalysis.dynamicfactoranalysis as dfa
 
+import warnings
+from statsmodels.tools.sm_exceptions import  ValueWarning
+warnings.simplefilter('ignore', ValueWarning)
+
 class NowcastingLSTM_MQ(NowcastingPH_M):
     def set_classname(self, **kwargs):
         self.prefix = f'LSTM{self.kwargs.get("lag_order")} x ' + ('DFM_Opt' if self.kwargs.get("optimize_order") else f'DFM{self.kwargs.get("DFM_order")}') if self.kwargs.get("extend") else f'LSTM{self.kwargs.get("lag_order")}'
@@ -82,15 +86,15 @@ def sliding_windows(data_x, seq_length, freq_ratio = 3):
     
     return np.array(x_encoder_in),np.array(y_decoder_in), np.array(x_target), np.array(y_target)
 
-def get_dataloader_for_vintage(vintage, mode="train"):
+def get_dataloader_for_vintage(vintage, with_econ, with_tweets, data_window, kmpair={}, mode="train"):
     data_model = NowcastingLSTM_MQ(target='GDP')
-    train_data, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair={'PE': ['CRVADER_BVN','CR_BxP_0'],'PU+': ['CRVADER_BVN','CR_BxP_0']}, with_econ=False, with_tweets=True, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False)
+    train_data, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False)
     train_data = train_data.dropna()
 
-    x_encoder_in, y_decoder_in, x_target, y_target = sliding_windows(train_data, seq_length=27)
+    x_encoder_in, y_decoder_in, x_target, y_target = sliding_windows(train_data, seq_length=data_window)
     trainX_in = torch.Tensor(x_encoder_in)#.to(device)
     trainY_in = torch.Tensor(y_decoder_in)#.to(device)
-    trainX_out = torch.Tensor(y_target)#.to(device)
+    trainX_out = torch.Tensor(x_target)#.to(device)
     trainY_out = torch.Tensor(y_target)#.to(device)
 
     dataset = TensorDataset(trainX_in, trainY_in, trainY_out)

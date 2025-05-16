@@ -3,28 +3,38 @@ from dateutil.relativedelta import relativedelta
 from data_utils import sliding_windows, NowcastingLSTM_MQ
 from STSeq2One import STMFSeq2One, MTMFSeq2SeqLightning
 
-def evaluate_one_vintage(vintage, version="", device="cpu"):
+def evaluate_one_vintage(vintage, with_econ, with_tweets, data_window, kmpair={}, version="", device="cpu"):
     ### Train Scaler + Backcast/Test Data
-    kmpair = {'PE': ['CRVADER_BVN','CR_BxP_0'],'PU+': ['CRVADER_BVN','CR_BxP_0']} # kmpair = {'PE':['CR_B0']}
     data_model = NowcastingLSTM_MQ(target='GDP')
-    train_data, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=False, with_tweets=True, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False)
-    data_window = 27
-    backcast_data, _, _, _ = data_model.load_data(vintage=vintage, window=1000, kmpair=kmpair, with_econ=False, with_tweets=True, target_release_lag=True,scaled=False, extend=True, DFM_order=(1,0,1,0), optimize_order = False)
+    train_data, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False)
+    backcast_data, _, _, _ = data_model.load_data(vintage=vintage, window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=False, extend=True, DFM_order=(1,0,1,0), optimize_order = False)
     backcast_data = backcast_data.loc[vintage + relativedelta(months = -((vintage.month - 1) % 3) - data_window, day=31):,:]#.dropna()#.reset_index()  # get first month of same qtr last year, but get final day. Based on window = 12
     backcast_data.iloc[:,:1] = target_scaler.transform(backcast_data.iloc[:,:1])
-    # backcast_data.iloc[:,1:] = econ_scaler.transform(backcast_data.iloc[:,1:10])
-    backcast_data.iloc[:,1:5] = tweets_scaler.transform(backcast_data.iloc[:,1:5])
-    # backcast_data.iloc[:,5:] = econ_scaler.transform(backcast_data.iloc[:,5:])
+
+    if with_econ and with_tweets:
+        econ_n_feat = econ_scaler.n_features_in_
+        tweets_n_feat = tweets_scaler.n_features_in_
+        backcast_data.iloc[:,1:tweets_n_feat+1] = tweets_scaler.transform(backcast_data.iloc[:,1:tweets_n_feat+1])
+        backcast_data.iloc[:,tweets_n_feat+1:] = econ_scaler.transform(backcast_data.iloc[:,tweets_n_feat+1:])
+        dim_x = econ_n_feat + tweets_n_feat
+    elif with_econ:
+        econ_n_feat = econ_scaler.n_features_in_
+        backcast_data.iloc[:,1:econ_n_feat+1] = econ_scaler.transform(backcast_data.iloc[:,1:econ_n_feat+1])
+        dim_x = econ_n_feat
+    elif with_tweets:
+        tweets_n_feat = tweets_scaler.n_features_in_
+        backcast_data.iloc[:,1:tweets_n_feat+1] = tweets_scaler.transform(backcast_data.iloc[:,1:tweets_n_feat+1])
+        dim_x = tweets_n_feat
     
     x_encoder_backcast_in, y_decoder_backcast_in, _, _ = sliding_windows(backcast_data, seq_length=data_window+3)
     backcastX_in = torch.Tensor(x_encoder_backcast_in)#.to(device)
     backcastY_in = torch.Tensor(y_decoder_backcast_in)#.to(device)
 
     ### Load Model
-    dim_x = 4 #trainX_in.shape[-1] # 9, 4, 13
-    dim_y = 1 #trainY_in.shape[-1] # 1
-    Lx = 27 #trainX_in.shape[1] # 15
-    Ty = 8 #trainY_in.shape[1] # 4
+    # dim_x = 9                 #trainX_in.shape[-1] # 9 # Number of features
+    dim_y = 1                   #trainY_in.shape[-1] # 1 # Number of targets
+    Lx = data_window            #trainX_in.shape[1] # 15 or 27 # Window length of x_input sequence (num months)
+    Ty = data_window // 3 - 1   #trainY_in.shape[1] # 4 or 8 # Window length of y_input sequence (num quarters)
     n_a = 4
     n_s = 8
     n_align = 4
