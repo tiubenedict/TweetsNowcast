@@ -13,6 +13,8 @@ import concurrent
 import multiprocessing as mp
 mp_fork = mp.get_context('fork')
 
+working_dir = os.getcwd()
+
 class NowcastingPipeline:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -128,21 +130,24 @@ class NowcastingPH_M(NowcastingPipeline):
         
         df = df.loc[:, ~df.T.duplicated(keep='first')]
         return df
-    def load_target(self, vintage, target='GDP', growth=True, quarterly=True, freq='M', target_release_lag=True, **kwargs):
+    def load_target(self, vintage, target='PHL_GDP_SA', growth=True, quarterly=True, freq='M', target_release_lag=True, **kwargs):
         vintage = pd.to_datetime(vintage)
-        df = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='data')[['date', target]].rename(columns={target: 'target'}).dropna()
+        df = pd.read_excel(f'{working_dir}/data/PH_Econ_Q.xlsx', sheet_name='data')[['date', target]].rename(columns={target: 'target'}).dropna()
         df['date'] = pd.to_datetime(df['date'], format="%m/%Y") + pd.offsets.MonthEnd(0)
         df = df.set_index('date')
 
-        meta = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='release')
+        meta = pd.read_excel(f'{working_dir}/data/PH_Econ_Q.xlsx', sheet_name='release')
         target_release_lag = meta.set_index('Variable Name').to_dict('dict')['Lag'][target] if target_release_lag else 0
 
         if quarterly:
             df = df.resample('QE').sum()
-            df = 100 * (df / df.shift(4) - 1) if growth else df
+            # df = 100 * (df / df.shift(4) - 1) if growth else df                       # for pct change YoY (NSA), shift(1) for (SA 100)
+            # df = 100 * (((1 + (df / df.shift(1) - 1)) ** 4 ) - 1) if growth else df   # for pct change QoQ (SA 4**)
+            df = 400 * np.log(df / df.shift(1)) if growth else df 
         else:
             df = df.resample('YE').sum()
-            df = 100 * (df / df.shift(1) - 1) if growth else df
+            # df = 100 * (df / df.shift(1) - 1) if growth else df                       # for pct change YoY
+            df = 100 * np.log(df / df.shift(1)) if growth else df                       # for log YoY
 
         df = df.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
         df.loc[pd.to_datetime(vintage) - relativedelta(days=target_release_lag-1) :, :] = np.nan
@@ -152,11 +157,11 @@ class NowcastingPH_M(NowcastingPipeline):
 
     def load_econ_m(self, vintage, window, freq='M', extend=False, **kwargs):
         vintage = pd.to_datetime(vintage)
-        econ_m = pd.read_excel('data/PH_Econ_M.xlsx', sheet_name='data')
+        econ_m = pd.read_excel(f'{working_dir}/data/PH_Econ_M.xlsx', sheet_name='data')
         econ_m['date'] = pd.to_datetime(econ_m['date'], format='%Y-%m-%d') + pd.offsets.MonthEnd(0)
         econ_m = econ_m.set_index('date')
 
-        meta = pd.read_excel('data/PH_Econ_M.xlsx', sheet_name='release')
+        meta = pd.read_excel(f'{working_dir}/data/PH_Econ_M.xlsx', sheet_name='release')
         meta['Lag'] = meta['Lag'] - 1
         lag_dict = meta.set_index('Variable Name').to_dict('dict')['Lag']
         econ_m = econ_m[meta.loc[meta['Include'] == 1, 'Variable Name']]
@@ -172,11 +177,11 @@ class NowcastingPH_M(NowcastingPipeline):
 
     def load_econ_q(self, vintage, window, freq='Q', extend=False, **kwargs):
         vintage = pd.to_datetime(vintage)
-        econ_q = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='data')
+        econ_q = pd.read_excel(f'{working_dir}/data/PH_Econ_Q.xlsx', sheet_name='data')
         econ_q['date'] = pd.to_datetime(econ_q['date'], format="%m/%Y") + pd.offsets.MonthEnd(0)
         econ_q = econ_q.set_index('date')
 
-        meta = pd.read_excel('data/PH_Econ_Q.xlsx', sheet_name='release')
+        meta = pd.read_excel(f'{working_dir}/data/PH_Econ_Q.xlsx', sheet_name='release')
         meta['Lag'] = meta['Lag'] - 1
         lag_dict = meta.set_index('Variable Name').to_dict('dict')['Lag']
         econ_q = econ_q[meta.loc[meta['Include'] == 1, 'Variable Name']]
@@ -200,30 +205,48 @@ class NowcastingPH_M(NowcastingPipeline):
         
         return econ
 
+    # def load_tweets(self, vintage, window, kmpair, freq='M', extend=False, **kwargs):
+    #     vintage = pd.to_datetime(vintage)
+    #     tweets = pd.read_csv(f'{working_dir}/data/PH_Tweets_v4.csv')
+    #     tweets['date'] = pd.to_datetime(tweets['date'], format='%Y-%m-%d') + pd.offsets.MonthEnd(0)
+    #     tweets = tweets.set_index('date')
+
+    #     if len(kmpair) == 0:
+    #         kmpair = {keyword: list(tweets.columns.drop('keyword')) for keyword in tweets['keyword'].unique()}
+    #     data = [tweets[tweets['keyword'] == keyword][kmpair[keyword]].add_suffix(f'_{keyword}') for keyword in kmpair.keys()]
+    #     tweets = reduce(lambda left, right: pd.merge(left, right, on='date', how='outer', sort=True), data)
+
+    #     tweets = tweets.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
+    #     tweets = tweets.loc[pd.to_datetime(vintage)  - relativedelta(months =  (pd.to_datetime(vintage).month - 1)%3 + window) : pd.to_datetime(vintage), :]
+    #     tweets = self.extend_data(tweets, vintage, **kwargs) if extend else tweets
+    #     tweets.index = pd.PeriodIndex(tweets.index, freq=freq)
+        
+    #     cols = ['C_00_PE', 'L_00_PE', 'R_00_PE', 'C_00_PU+', 'L_00_PU+', 'R_00_PU+']
+    #     for col in cols:
+    #         if list(tweets.columns).count(col) > 1:
+    #             tweets[col] = tweets[col].clip(lower=1)
+    #             tweets[col] = tweets[col].pct_change()
+    #     return tweets
     def load_tweets(self, vintage, window, kmpair, freq='M', extend=False, **kwargs):
         vintage = pd.to_datetime(vintage)
-        tweets = pd.read_csv('data/PH_Tweets_v4.csv')
-        tweets['date'] = pd.to_datetime(tweets['date'], format='%Y-%m-%d') + pd.offsets.MonthEnd(0)
+        tweets = pd.read_csv(f'{working_dir}/data/PH_Tweets_v6.csv')
+        tweets['date'] = pd.to_datetime(tweets['date']) + pd.offsets.MonthEnd(0)
         tweets = tweets.set_index('date')
 
         if len(kmpair) == 0:
             kmpair = {keyword: list(tweets.columns.drop('keyword')) for keyword in tweets['keyword'].unique()}
         data = [tweets[tweets['keyword'] == keyword][kmpair[keyword]].add_suffix(f'_{keyword}') for keyword in kmpair.keys()]
         tweets = reduce(lambda left, right: pd.merge(left, right, on='date', how='outer', sort=True), data)
-
         tweets = tweets.loc[dt.datetime(2010,1,1) : pd.to_datetime(vintage), :]
-        tweets = tweets.loc[pd.to_datetime(vintage)  - relativedelta(months =  (pd.to_datetime(vintage).month - 1)%3 + window) : pd.to_datetime(vintage), :]
+        # tweets = tweets.loc[pd.to_datetime(vintage)  - relativedelta(months =  (pd.to_datetime(vintage).month - 1)%3 + window) : pd.to_datetime(vintage), :]
+        # tweets = super().load_tweets(vintage, freq='M', **kwargs)
+        # DFM_order = self.kwargs.get('DFM_order')                                             ### temporary measure to solve stationarity error
+        # kwargs['DFM_order'] = (1, DFM_order[1], DFM_order[2], DFM_order[3])                   ### temporary measure to solve stationarity error
         tweets = self.extend_data(tweets, vintage, **kwargs) if extend else tweets
         tweets.index = pd.PeriodIndex(tweets.index, freq=freq)
-        
-        cols = ['C_00_PE', 'L_00_PE', 'R_00_PE', 'C_00_PU+', 'L_00_PU+', 'R_00_PU+']
-        for col in cols:
-            if list(tweets.columns).count(col) > 1:
-                tweets[col] = tweets[col].clip(lower=1)
-                tweets[col] = tweets[col].pct_change()
         return tweets
 
-    def load_data(self, vintage, target='GDP', window=0, scaled=True, **kwargs):
+    def load_data(self, vintage, target='PHL_GDP_SA', window=0, scaled=True, **kwargs):
         vintage = pd.to_datetime(vintage)
         df = self.load_target(vintage, target, growth=True, quarterly=True, freq='M', **kwargs)
         target_scaler = StandardScaler(with_mean=scaled, with_std=scaled).fit(df[['target']])
@@ -284,8 +307,10 @@ class NowcastingPH_M(NowcastingPipeline):
         summary = summary[['date', 'Model'] + [col for col in summary.columns if '_A' in col] + 
                           [col for col in summary.columns if '_Q' in col] + [f'ForecastQ{q}' for q in range(1,5)]]
         return summary
+
     def set_classname(self, **kwargs):
         raise NotImplementedError
+
     def run(self, start=dt.datetime(2017,1,31), end=dt.datetime(2023,1,1), delta=pd.offsets.MonthEnd(1), window=0, multiprocess=0, **kwargs):
         summary = super().run(start, end, delta, window, multiprocess, **kwargs)
         summary = self.process_summary(summary)
@@ -295,7 +320,8 @@ class NowcastingPH_M(NowcastingPipeline):
             if not os.path.exists(f'Results'):
                 os.makedirs(f'Results')
             suffix = ('T' if kwargs.get('with_tweets', True) else '') + ('E' if kwargs.get('with_econ', True) else '')
+            # summary.to_csv(f'Results/{self.prefix}-M_W{window}_{self.kwargs.get("target")}_{suffix}_summary.csv', index=False)
+            summary.to_csv(f'Results/{self.prefix}-M_W{window}_{self.kwargs.get("target")}_{suffix}_L1-{self.kwargs.get("l1_weight",{"loadings":0}).get("loadings")}_L2-{self.kwargs.get("l2_weight",{"loadings":0}).get("loadings")}_summary.csv', index=False)
             # summary.to_csv(f'Results/{self.prefix}_W{window}_{self.kwargs.get("target")}_{suffix}_n{str(format(self.kwargs.get("n_components"), ".02f"))[2:]}_summary.csv', index=False)
-            summary.to_csv(f'Results/{self.prefix}-M_W{window}_{self.kwargs.get("target")}_{suffix}_summary.csv', index=False)
 
         return summary
