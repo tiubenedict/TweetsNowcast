@@ -1,5 +1,5 @@
-# import multiprocess as mp
 import functools
+import importlib
 import pandas as pd
 import ray
 import ray.tune
@@ -10,51 +10,76 @@ import lightning.pytorch as pl
 import argparse
 
 parser = argparse.ArgumentParser(description="Run Ray Tune experiments for a specified range of vintage months.")
-parser.add_argument("--start_month", type=str, required=True, help="Start month for vintage IDs (YYYY-MM-DD format).")
-parser.add_argument("--end_month", type=str, required=True, help="End month for vintage IDs (YYYY-MM-DD format).")
+parser.add_argument("--config", type=str, default=None, help="Python module path to a trial config, e.g. configs.st_nobiasTE_v1. If omitted, uses the legacy hardcoded sweep.")
+parser.add_argument("--start_month", type=str, default=None, help="Override config's DEFAULT_START_MONTH (YYYY-MM-DD).")
+parser.add_argument("--end_month", type=str, default=None, help="Override config's DEFAULT_END_MONTH (YYYY-MM-DD).")
+parser.add_argument("--train_bias", action="store_true", help="Override: include last 3 rows in training data. Default follows config (usually nobias).")
+parser.add_argument("--run_tag", type=str, default=None, help="Tag appended to the storage path. Defaults to config.NAME when --config is used.")
 args = parser.parse_args()
 
-# device = 'cpu'
-task = "singletask"  # "multitask" or "singletask"
-# kmpair = {'PE': ['CR_G0','CR_B0']}
-# kmpair = {'PE': ['VADERstanceweight_log_stl'], 'PU+': ['CR_lognorm']}
-kmpair = {'PE':['VADERstanceweight_log_stl', 'VADERraw']}
-with_econ = True
-with_tweets = True
-vintage_ids = list(pd.date_range(start=args.start_month, end=args.end_month, freq="ME"))
-# vintage_ids = list(pd.date_range(start="2017-01-31", end="2023-01-01", freq="ME"))
-# vintage_ids = list(pd.date_range(start="2020-01-31", end="2021-01-01", freq="ME"))
-# with mp.Pool(processes=3) as pool: #.get_context('spawn')
-#     results = pool.map(functools.partial(train_one_vintage, device=device), vintage_ids)
-# print("\n".join(results))
+task = "singletask"
+
+if args.config is not None:
+    cfg = importlib.import_module(args.config)
+    assert cfg.TASK == task, f"Config {args.config} has TASK={cfg.TASK!r}, expected {task!r}"
+    kmpair = cfg.KMPAIR
+    with_econ = cfg.WITH_ECON
+    with_tweets = cfg.WITH_TWEETS
+    train_bias = args.train_bias or cfg.TRAIN_BIAS
+    start_month = args.start_month or cfg.DEFAULT_START_MONTH
+    end_month = args.end_month or cfg.DEFAULT_END_MONTH
+    run_tag = args.run_tag or cfg.NAME
+    param_space = cfg.PARAM_SPACE
+    metric = cfg.METRIC
+    num_samples = cfg.NUM_SAMPLES
+    max_concurrent = cfg.MAX_CONCURRENT
+    scheduler = getattr(cfg, "SCHEDULER", None)
+else:
+    # Legacy hardcoded sweep (preserved for backwards compat; prefer --config).
+    assert args.start_month and args.end_month, "Either --config or both --start_month and --end_month are required."
+    kmpair = {'PE': ['VADERstanceweight_log_stl', 'VADERraw']}
+    with_econ = True
+    with_tweets = True
+    train_bias = args.train_bias
+    start_month = args.start_month
+    end_month = args.end_month
+    run_tag = args.run_tag or "optuna2"
+    param_space = {
+        "epochs": ray.tune.choice([150]),
+        "learning_rate": ray.tune.loguniform(1e-3, 1e-1),
+        "weight_decay": ray.tune.loguniform(1e-4, 1e-2),
+        "num_layers": ray.tune.choice([1, 2]),
+        "data_window": ray.tune.choice([3, 6, 12, 24, 36, 48, 60, 72]),
+    }
+    metric = "val_loss_y"
+    num_samples = 50
+    max_concurrent = 8
+    scheduler = None
+
+bias_tag = "bias" if train_bias else "nobias"
+tweets_tag = "TE" if with_tweets else "E"
+vintage_ids = list(pd.date_range(start=start_month, end=end_month, freq="ME"))
 
 pl.seed_everything(42, workers=True)
-ray.init(log_to_driver=False, logging_level="ERROR") # runtime_env={"working_dir": "/home/btiu/Documents/Research/TweetsNowcast"}
+ray.init(log_to_driver=False, logging_level="ERROR")
 for vintage_id in vintage_ids:
+    tune_config_kwargs = dict(
+        metric=metric,
+        mode="min",
+        num_samples=num_samples,
+        search_alg=ConcurrencyLimiter(OptunaSearch(metric=metric, mode="min"), max_concurrent=max_concurrent),
+    )
+    if scheduler is not None:
+        tune_config_kwargs["scheduler"] = scheduler
     tuner = ray.tune.Tuner(
-        ray.tune.with_parameters(functools.partial(train_model, vintage=vintage_id, with_econ=with_econ, with_tweets=with_tweets, kmpair=kmpair, task=task)),
-        param_space={
-            # "learning_rate": ray.tune.grid_search([1e-1, 1e-2]),
-            # "weight_decay": ray.tune.grid_search([1e-2, 1e-3]),
-            # "num_layers": ray.tune.grid_search([1, 2]),
-            # "data_window": ray.tune.grid_search([6, 12, 24, 48, 72]), # remove 6, 24, 48
-            "epochs": ray.tune.choice([150]),
-            "learning_rate": ray.tune.loguniform(1e-3, 1e-1),
-            "weight_decay": ray.tune.loguniform(1e-4, 1e-2),
-            "num_layers": ray.tune.choice([1, 2]),
-            "data_window": ray.tune.choice([3, 6, 12, 24, 36, 48, 60, 72]),
-        },
-        tune_config=ray.tune.TuneConfig(
-            metric="val_loss_y",
-            mode="min",
-            num_samples=50,
-            search_alg=ConcurrencyLimiter(OptunaSearch(metric="val_loss_y",mode="min"), max_concurrent=8),
-        ),
+        ray.tune.with_parameters(functools.partial(train_model, vintage=vintage_id, with_econ=with_econ, with_tweets=with_tweets, kmpair=kmpair, task=task, train_bias=train_bias)),
+        param_space=param_space,
+        tune_config=ray.tune.TuneConfig(**tune_config_kwargs),
         run_config=ray.tune.RunConfig(
             name=f"{vintage_id.strftime('%Y-%m')}",
-            storage_path=f"/home/btiu/Documents/Research/TweetsNowcast/ray_results/{task}_nobiasTEoptuna2",
+            storage_path=f"/home/btiu/Documents/Research/TweetsNowcast/ray_results/{task}_{bias_tag}{tweets_tag}{run_tag}",
             verbose=1,
-            checkpoint_config=ray.tune.CheckpointConfig(num_to_keep=1, checkpoint_score_attribute="val_loss_y", checkpoint_score_order="min"), # Slows down training
+            checkpoint_config=ray.tune.CheckpointConfig(num_to_keep=1, checkpoint_score_attribute=metric, checkpoint_score_order="min"),
         ),
     )
     results = tuner.fit()

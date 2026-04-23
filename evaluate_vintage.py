@@ -28,7 +28,16 @@ def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckp
     testY_in = torch.Tensor(y_decoder_in)#.to(device)
 
     # lightning_model = MTMFSeq2OneLightning.load_from_checkpoint(checkpoint_path=f"lightning_logs/version{version}/checkpoints/model.ckpt", model=model) # checkpoints/vintage_{vintage}/model{version}.ckpt
-    lightning_model = STMFSeq2OneLightning.load_from_checkpoint(checkpoint_path=ckpt_path, model=STMFSeq2One(dim_x=testX_in.shape[-1], dim_y=testY_in.shape[-1], num_layers=config['num_layers']))
+    lightning_model = STMFSeq2OneLightning.load_from_checkpoint(
+        checkpoint_path=ckpt_path,
+        model=STMFSeq2One(
+            dim_x=testX_in.shape[-1], dim_y=testY_in.shape[-1],
+            num_layers=config['num_layers'],
+            n_a=config.get('n_a', 4), n_s=config.get('n_s', 8),
+            n_align=config.get('n_align', 4), fc_y=config.get('fc_y', 4),
+            dropout_rate=config.get('dropout_rate', 0.0),
+        ),
+    )
     lightning_model = lightning_model.to(device)
     lightning_model.eval()
     with torch.no_grad():
@@ -66,7 +75,17 @@ def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckp
     testY_in = torch.Tensor(y_decoder_in)#.to(device)
 
     # lightning_model = MTMFSeq2OneLightning.load_from_checkpoint(checkpoint_path=f"lightning_logs/version{version}/checkpoints/model.ckpt", model=model) # checkpoints/vintage_{vintage}/model{version}.ckpt
-    lightning_model = MTMFSeq2OneLightning.load_from_checkpoint(checkpoint_path=ckpt_path, model=MTMFSeq2One(dim_x=testX_in.shape[-1], dim_y=testY_in.shape[-1], num_layers=config['num_layers']))
+    lightning_model = MTMFSeq2OneLightning.load_from_checkpoint(
+        checkpoint_path=ckpt_path,
+        model=MTMFSeq2One(
+            dim_x=testX_in.shape[-1], dim_y=testY_in.shape[-1],
+            num_layers=config['num_layers'],
+            n_a=config.get('n_a', 4), n_s=config.get('n_s', 8),
+            n_align=config.get('n_align', 4),
+            fc_x=config.get('fc_x', 4), fc_y=config.get('fc_y', 4),
+            dropout_rate=config.get('dropout_rate', 0.0),
+        ),
+    )
     lightning_model = lightning_model.to(device)
     lightning_model.eval()
     with torch.no_grad():

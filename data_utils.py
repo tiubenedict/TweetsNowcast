@@ -187,11 +187,13 @@ def sliding_windows_MT(df, seq_length, train=True, freq_ratio = 3):
 
     return torch.tensor(np.array(x_encoder_in), dtype=torch.float32), torch.tensor(np.array(y_encoder_in), dtype=torch.float32), torch.tensor(np.array(x_target), dtype=torch.float32), torch.tensor(np.array(y_target), dtype=torch.float32)
 
-def get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair, data_window, task, mode="train"):
+def get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair, data_window, task, mode="train", train_bias=False):
     data_model = NowcastingLSTM_MQ()
     data, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target='PHL_GDP_SA')
     data = data.dropna()
-    train_data = data.iloc[:] # [:-3] for no bias during training, [:] for bias during training
+    # train_bias=False (default): drop last 3 rows so training excludes the current quarter that overlaps val (clean).
+    # train_bias=True: include last 3 rows — current quarter leaks into training. Explicit opt-in for comparison runs.
+    train_data = data.iloc[:] if train_bias else data.iloc[:-3]
     val_data = data.iloc[-data_window-3:]
     # val_data, _, _, _ = data_model.load_data(vintage=vintage+pd.offsets.QuarterEnd(0)+pd.DateOffset(months=2),window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=False, scaled=False, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target='PHL_GDP_SA')
     # val_data = val_data.dropna().iloc[-data_window-3:]

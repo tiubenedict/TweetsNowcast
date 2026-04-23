@@ -8,9 +8,16 @@ from STSeq2One import STMFSeq2OneLightning
 from MTSeq2One import MTMFSeq2OneLightning
 from data_utils import get_dataloader_for_vintage
 
-def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path=None, logger_enabled=False, device='cpu'):
+def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path=None, logger_enabled=False, device='cpu', train_bias=False):
     pl.seed_everything(42, workers=True)
-    train_loader, val_loader, _,_,_ = get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair=kmpair, data_window = config['data_window'], task=task)
+    train_loader, val_loader, _,_,_ = get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair=kmpair, data_window = config['data_window'], task=task, train_bias=train_bias)
+    # Architecture knobs — read from config with defaults matching historical fixed values.
+    arch_kwargs = dict(
+        n_a=config.get('n_a', 4),
+        n_s=config.get('n_s', 8),
+        n_align=config.get('n_align', 4),
+        dropout_rate=config.get('dropout_rate', 0.0),
+    )
     if task == "singletask":
         model = STMFSeq2OneLightning(
             dim_x=train_loader.dataset.tensors[0].shape[-1],
@@ -18,6 +25,8 @@ def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path
             learning_rate=config["learning_rate"],
             weight_decay=config["weight_decay"],
             num_layers=config['num_layers'],
+            fc_y=config.get('fc_y', 4),
+            **arch_kwargs,
         )
         tune_callback = TuneReportCheckpointCallback(metrics={'val_loss_y': 'val_loss_y', 'train_loss': 'train_loss'})
         checkpoint_callback = ModelCheckpoint(monitor="val_loss_y", mode="min", save_top_k=1, save_last=True)
@@ -28,7 +37,10 @@ def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path
             num_layers=config['num_layers'],
             learning_rate=config["learning_rate"],
             weight_decay=config["weight_decay"],
-            alpha=config['alpha']
+            alpha=config['alpha'],
+            fc_x=config.get('fc_x', 4),
+            fc_y=config.get('fc_y', 4),
+            **arch_kwargs,
         )
         tune_callback = TuneReportCheckpointCallback(metrics={'val_loss_y': 'val_loss_y', 'val_loss_x': 'val_loss_x', 'val_loss': 'val_loss','train_loss': 'train_loss'})
         checkpoint_callback = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, save_last=True)
