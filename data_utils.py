@@ -191,10 +191,13 @@ def get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair, data_win
     data_model = NowcastingLSTM_MQ()
     data, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target='PHL_GDP_SA')
     data = data.dropna()
-    # train_bias=False (default): drop last 3 rows so training excludes the current quarter that overlaps val (clean).
-    # train_bias=True: include last 3 rows — current quarter leaks into training. Explicit opt-in for comparison runs.
-    train_data = data.iloc[:] if train_bias else data.iloc[:-3]
-    val_data = data.iloc[-data_window-3:]
+    # N=2 forward-walk split:
+    #   train_bias=False (default): drop last 6 rows so the last 2 quarters are held out of training.
+    #                               Validation last-1 targets from val windows i=0 and i=3 (ST; stride freq_ratio)
+    #                               land in those held-out quarters — genuine generalization signal.
+    #   train_bias=True: include everything in training (leaky; explicit opt-in for comparison runs only).
+    train_data = data.iloc[:] if train_bias else data.iloc[:-6]
+    val_data = data.iloc[-data_window-6:]
     # val_data, _, _, _ = data_model.load_data(vintage=vintage+pd.offsets.QuarterEnd(0)+pd.DateOffset(months=2),window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=False, scaled=False, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target='PHL_GDP_SA')
     # val_data = val_data.dropna().iloc[-data_window-3:]
     # val_data.iloc[:,:1] = target_scaler.transform(val_data.iloc[:,:1])
