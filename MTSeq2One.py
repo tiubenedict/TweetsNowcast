@@ -96,7 +96,7 @@ class MTMFSeq2OneLightning(pl.LightningModule):
         x_encoder_in, y_encoder_in, x_target, y_target = batch
         x_pred, y_pred = self(x_encoder_in, y_encoder_in)
         loss_x = self.criterion(x_pred[:, -self.freq_ratio:, :], x_target[:, -self.freq_ratio:, :])
-        loss_y = self.criterion(y_pred[:, -4:, :], y_target[:, -4:, :])
+        loss_y = self.criterion(y_pred[:, -1:, :], y_target[:, -1:, :])
         loss = loss_x + loss_y
         self.log("val_loss_x", loss_x, on_epoch=True, prog_bar=True)
         self.log("val_loss_y", loss_y, on_epoch=True, prog_bar=True)

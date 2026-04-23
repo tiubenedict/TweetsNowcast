@@ -84,7 +84,7 @@ class STMFSeq2OneLightning(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x_encoder_in, y_encoder_in, y_target = batch
         y_pred = self(x_encoder_in, y_encoder_in)
-        loss_y = self.criterion(y_pred[:, -2:, :], y_target[:, -2:, :])
+        loss_y = self.criterion(y_pred[:, -1:, :], y_target[:, -1:, :])
         self.log("val_loss_y", loss_y, on_epoch=True, prog_bar=True)
         return loss_y
 

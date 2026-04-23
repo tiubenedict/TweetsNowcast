@@ -43,7 +43,7 @@ def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path
             **arch_kwargs,
         )
         tune_callback = TuneReportCheckpointCallback(metrics={'val_loss_y': 'val_loss_y', 'val_loss_x': 'val_loss_x', 'val_loss': 'val_loss','train_loss': 'train_loss'})
-        checkpoint_callback = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, save_last=True)
+        checkpoint_callback = ModelCheckpoint(monitor="val_loss_y", mode="min", save_top_k=1, save_last=True)
     # checkpoint_callback = ModelCheckpoint(dirpath=f"checkpoints/vintage_{vintage}", filename="model", save_top_k=1, monitor="val_loss_y", mode="min", save_last=True)
     lr_monitor = LearningRateMonitor(logging_interval='step')
     trainer = pl.Trainer(
