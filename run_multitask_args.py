@@ -1,3 +1,4 @@
+import copy
 import functools
 import importlib
 import pandas as pd
@@ -70,7 +71,9 @@ for vintage_id in vintage_ids:
         search_alg=ConcurrencyLimiter(OptunaSearch(metric=metric, mode="min"), max_concurrent=max_concurrent),
     )
     if scheduler is not None:
-        tune_config_kwargs["scheduler"] = scheduler
+        # Deepcopy so each vintage gets a fresh scheduler — Ray mutates metric/mode
+        # onto it during fit(), which would make subsequent vintages fail.
+        tune_config_kwargs["scheduler"] = copy.deepcopy(scheduler)
     tuner = ray.tune.Tuner(
         ray.tune.with_parameters(functools.partial(train_model, vintage=vintage_id, with_econ=with_econ, with_tweets=with_tweets, kmpair=kmpair, task=task, train_bias=train_bias)),
         param_space=param_space,
