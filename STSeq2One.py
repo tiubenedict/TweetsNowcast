@@ -5,17 +5,28 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 
-from nn_blocks import Encoder, OneStepAttn, PreAttnEncoder  # noqa: F401  # PreAttnEncoder kept for A/B testing
+from nn_blocks import Encoder, OneStepAttn, PreAttnEncoder
 
 
 class STMFSeq2One(nn.Module):
-    def __init__(self, dim_x, dim_y, num_layers, n_a=4, n_s=8, n_align=4, fc_y=4, dropout_rate=0, freq_ratio=3, bidirectional_encoder=False):
+    def __init__(self, dim_x, dim_y, num_layers, n_a=4, n_s=8, n_align=4, fc_y=4,
+                 dropout_rate=0, freq_ratio=3,
+                 encoder_type="autoregressive", bidirectional=False):
         super(STMFSeq2One, self).__init__()
         self.n_s = n_s
         self.num_layers = num_layers
         self.freq_ratio = freq_ratio
+        self.encoder_type = encoder_type
 
-        self.encoder_x = Encoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate)
+        if encoder_type == "autoregressive":
+            self.encoder_x = Encoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate)
+        elif encoder_type == "pre_attn":
+            self.encoder_x = PreAttnEncoder(input_dim=dim_x, hidden_dim=n_a, dropout_rate=dropout_rate, bidirectional=bidirectional)
+        else:
+            raise ValueError(f"encoder_type must be 'autoregressive' or 'pre_attn', got {encoder_type!r}")
+
+        # y-encoder stays autoregressive: y (quarterly target) has its own ragged-tail
+        # to impute, and the direction knob is for x's encoder only.
         self.encoder_y = Encoder(input_dim=dim_y, hidden_dim=n_a, num_layers=1, dropout_rate=dropout_rate)
 
         self.one_step_attention = OneStepAttn(n_a, n_s, n_align)
@@ -32,8 +43,8 @@ class STMFSeq2One(nn.Module):
         batch_size = x_encoder_in.size(0)
         Ty = y_decoder_in.size(1)
 
-        x_a = self.encoder_x(x_encoder_in)
-        y_a = self.encoder_y(y_decoder_in)
+        x_a, x_mask = self.encoder_x(x_encoder_in)
+        y_a, _ = self.encoder_y(y_decoder_in)
 
         s = [torch.zeros(batch_size, self.n_s, device=x_encoder_in.device) for _ in range(self.num_layers)]
         c = [torch.zeros(batch_size, self.n_s, device=x_encoder_in.device) for _ in range(self.num_layers)]
@@ -42,7 +53,8 @@ class STMFSeq2One(nn.Module):
         for t in range(Ty):
             a_idx = int((t + 1) * self.freq_ratio - 1)
             a_to_attend = x_a[:, (a_idx - self.freq_ratio + 1):(a_idx + 1), :]
-            context = self.one_step_attention(a_to_attend, s[-1])
+            mask_to_attend = x_mask[:, (a_idx - self.freq_ratio + 1):(a_idx + 1)]
+            context = self.one_step_attention(a_to_attend, s[-1], mask=mask_to_attend)
             post_attn_input = torch.cat((context, y_a[:, t, :]), dim=-1)
             input_t = post_attn_input
             for i, cell in enumerate(self.post_attn_cells):
@@ -59,12 +71,14 @@ class STMFSeq2One(nn.Module):
 
 class STMFSeq2OneLightning(pl.LightningModule):
     def __init__(self, dim_x, dim_y, learning_rate, weight_decay, num_layers,
-                 n_a=4, n_s=8, n_align=4, fc_y=4, dropout_rate=0.0):
+                 n_a=4, n_s=8, n_align=4, fc_y=4, dropout_rate=0.0,
+                 encoder_type="autoregressive", bidirectional=False):
         super().__init__()
         self.save_hyperparameters()
         self.model = STMFSeq2One(
             dim_x=dim_x, dim_y=dim_y, num_layers=num_layers,
             n_a=n_a, n_s=n_s, n_align=n_align, fc_y=fc_y, dropout_rate=dropout_rate,
+            encoder_type=encoder_type, bidirectional=bidirectional,
         )
         self.criterion = torch.nn.MSELoss()
         self.learning_rate = learning_rate

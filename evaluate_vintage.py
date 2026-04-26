@@ -36,6 +36,8 @@ def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckp
             n_a=config.get('n_a', 4), n_s=config.get('n_s', 8),
             n_align=config.get('n_align', 4), fc_y=config.get('fc_y', 4),
             dropout_rate=config.get('dropout_rate', 0.0),
+            encoder_type=config.get('encoder_type', 'autoregressive'),
+            bidirectional=config.get('bidirectional', False),
         ),
     )
     lightning_model = lightning_model.to(device)
@@ -84,6 +86,8 @@ def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckp
             n_align=config.get('n_align', 4),
             fc_x=config.get('fc_x', 4), fc_y=config.get('fc_y', 4),
             dropout_rate=config.get('dropout_rate', 0.0),
+            encoder_type=config.get('encoder_type', 'autoregressive'),
+            bidirectional=config.get('bidirectional', False),
         ),
     )
     lightning_model = lightning_model.to(device)
@@ -92,7 +96,7 @@ def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckp
         start_row = 3 if vintage.month % 3 == 1 else 0
         # start_row = 0       # start_row = 3 if vintage.month % 3 == 1 else 0 ### whether to start from the first row or the fourth row
         if vintage.month % 3 == 1:
-            latent = lightning_model.model.encoder_x(testX_in[:,:-3]) # Encode the input sequence excluding the last 3 columns
+            latent, _ = lightning_model.model.encoder_x(testX_in[:,:-3]) # encoder now returns (x_a, mask); mask unused for decoder_x backcast
             backcastX = lightning_model.model.decoder_x(latent)
             nan_mask = torch.isnan(testX_in[0, -4])                 # Find NaNs in the second to the last row of testX_in
             testX_in[0, -4][nan_mask] = backcastX[0, -1][nan_mask]  # Take last row of backcast and replace NaNs
