@@ -187,17 +187,19 @@ def sliding_windows_MT(df, seq_length, train=True, freq_ratio = 3):
 
     return torch.tensor(np.array(x_encoder_in), dtype=torch.float32), torch.tensor(np.array(y_encoder_in), dtype=torch.float32), torch.tensor(np.array(x_target), dtype=torch.float32), torch.tensor(np.array(y_target), dtype=torch.float32)
 
-def get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair, data_window, task, mode="train", train_bias=False):
+def get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair, data_window, task, mode="train", train_bias=False, walk_n=2):
     data_model = NowcastingLSTM_MQ()
     data, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target='PHL_GDP_SA')
     data = data.dropna()
-    # N=2 forward-walk split:
-    #   train_bias=False (default): drop last 6 rows so the last 2 quarters are held out of training.
-    #                               Validation last-1 targets from val windows i=0 and i=3 (ST; stride freq_ratio)
-    #                               land in those held-out quarters — genuine generalization signal.
+    # Forward-walk split:
+    #   train_bias=False (default): drop last walk_n*3 rows so the last walk_n quarters are held out of training.
+    #                               Validation last-1 target lands on the most recent observed quarter.
+    #                               walk_n=2: training ends 1 quarter before val target (gap of 1 quarter).
+    #                               walk_n=1: training ends adjacent to val target (no gap, more recent training data).
     #   train_bias=True: include everything in training (leaky; explicit opt-in for comparison runs only).
-    train_data = data.iloc[:] if train_bias else data.iloc[:-6]
-    val_data = data.iloc[-data_window-6:]
+    drop = walk_n * 3
+    train_data = data.iloc[:] if train_bias else data.iloc[:-drop]
+    val_data = data.iloc[-data_window-drop:]
     # val_data, _, _, _ = data_model.load_data(vintage=vintage+pd.offsets.QuarterEnd(0)+pd.DateOffset(months=2),window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=False, scaled=False, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target='PHL_GDP_SA')
     # val_data = val_data.dropna().iloc[-data_window-3:]
     # val_data.iloc[:,:1] = target_scaler.transform(val_data.iloc[:,:1])

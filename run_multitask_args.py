@@ -15,6 +15,7 @@ parser.add_argument("--config", type=str, default=None, help="Python module path
 parser.add_argument("--start_month", type=str, default=None, help="Override config's DEFAULT_START_MONTH (YYYY-MM-DD).")
 parser.add_argument("--end_month", type=str, default=None, help="Override config's DEFAULT_END_MONTH (YYYY-MM-DD).")
 parser.add_argument("--train_bias", action="store_true", help="Override: include last 3 rows in training data. Default follows config (usually nobias).")
+parser.add_argument("--walk_n", type=int, default=None, help="Override forward-walk N (1 or 2). Default follows config.WALK_N.")
 parser.add_argument("--run_tag", type=str, default=None, help="Tag appended to the storage path. Defaults to config.NAME when --config is used.")
 args = parser.parse_args()
 
@@ -27,6 +28,7 @@ if args.config is not None:
     with_econ = cfg.WITH_ECON
     with_tweets = cfg.WITH_TWEETS
     train_bias = args.train_bias or cfg.TRAIN_BIAS
+    walk_n = args.walk_n if args.walk_n is not None else getattr(cfg, "WALK_N", 2)
     start_month = args.start_month or cfg.DEFAULT_START_MONTH
     end_month = args.end_month or cfg.DEFAULT_END_MONTH
     run_tag = args.run_tag or cfg.NAME
@@ -41,6 +43,7 @@ else:
     with_econ = True
     with_tweets = True
     train_bias = args.train_bias
+    walk_n = args.walk_n if args.walk_n is not None else 2
     start_month = args.start_month
     end_month = args.end_month
     run_tag = args.run_tag or "optuna4y1x"
@@ -75,7 +78,7 @@ for vintage_id in vintage_ids:
         # onto it during fit(), which would make subsequent vintages fail.
         tune_config_kwargs["scheduler"] = copy.deepcopy(scheduler)
     tuner = ray.tune.Tuner(
-        ray.tune.with_parameters(functools.partial(train_model, vintage=vintage_id, with_econ=with_econ, with_tweets=with_tweets, kmpair=kmpair, task=task, train_bias=train_bias)),
+        ray.tune.with_parameters(functools.partial(train_model, vintage=vintage_id, with_econ=with_econ, with_tweets=with_tweets, kmpair=kmpair, task=task, train_bias=train_bias, walk_n=walk_n)),
         param_space=param_space,
         tune_config=ray.tune.TuneConfig(**tune_config_kwargs),
         run_config=ray.tune.RunConfig(

@@ -8,9 +8,9 @@ from STSeq2One import STMFSeq2OneLightning
 from MTSeq2One import MTMFSeq2OneLightning
 from data_utils import get_dataloader_for_vintage
 
-def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path=None, logger_enabled=False, device='cpu', train_bias=False):
+def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path=None, logger_enabled=False, device='cpu', train_bias=False, walk_n=2):
     pl.seed_everything(42, workers=True)
-    train_loader, val_loader, _,_,_ = get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair=kmpair, data_window = config['data_window'], task=task, train_bias=train_bias)
+    train_loader, val_loader, _,_,_ = get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair=kmpair, data_window = config['data_window'], task=task, train_bias=train_bias, walk_n=walk_n)
     # Architecture knobs — read from config with defaults matching historical fixed values.
     arch_kwargs = dict(
         n_a=config.get('n_a', 4),
