@@ -63,10 +63,24 @@ else:
 bias_tag = "bias" if train_bias else "nobias"
 tweets_tag = "TE" if with_tweets else "E"
 vintage_ids = list(pd.date_range(start=start_month, end=end_month, freq="ME"))
+storage_root = f"/home/btiu/Documents/Research/TweetsNowcast/ray_results/{task}_{bias_tag}{tweets_tag}{run_tag}"
+
+import os as _os
+def _vintage_complete(vstr: str) -> bool:
+    """A vintage is treated as complete if its dir has >= num_samples tune trial subdirs."""
+    vpath = f"{storage_root}/{vstr}"
+    if not _os.path.isdir(vpath):
+        return False
+    trial_dirs = [d for d in _os.listdir(vpath) if d.startswith("tune_with_parameters_")]
+    return len(trial_dirs) >= num_samples
 
 pl.seed_everything(42, workers=True)
 ray.init(log_to_driver=False, logging_level="ERROR")
 for vintage_id in vintage_ids:
+    vstr = vintage_id.strftime("%Y-%m")
+    if _vintage_complete(vstr):
+        print(f"[skip] {vstr} already has {num_samples} trials")
+        continue
     tune_config_kwargs = dict(
         metric=metric,
         mode="min",
