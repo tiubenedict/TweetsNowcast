@@ -24,7 +24,8 @@ class Decoder(nn.Module):
 class MTMFSeq2One(nn.Module):
     def __init__(self, dim_x, dim_y, num_layers=1, n_a=4, n_s=8, n_align=4, fc_x=4, fc_y=4,
                  dropout_rate=0.0, freq_ratio=3,
-                 encoder_type="autoregressive", bidirectional=False):
+                 encoder_type="autoregressive", bidirectional=False,
+                 attention_relu=True):
         super(MTMFSeq2One, self).__init__()
         self.n_s = n_s
         self.num_layers = num_layers
@@ -34,14 +35,14 @@ class MTMFSeq2One(nn.Module):
         if encoder_type == "autoregressive":
             self.encoder_x = Encoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate)
         elif encoder_type == "pre_attn":
-            self.encoder_x = PreAttnEncoder(input_dim=dim_x, hidden_dim=n_a, dropout_rate=dropout_rate, bidirectional=bidirectional)
+            self.encoder_x = PreAttnEncoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate, bidirectional=bidirectional)
         else:
             raise ValueError(f"encoder_type must be 'autoregressive' or 'pre_attn', got {encoder_type!r}")
 
         self.decoder_x = Decoder(n_latent=n_a, dim=dim_x, hidden_dim=fc_x)
         # y-encoder stays autoregressive (see STMFSeq2One note).
         self.encoder_y = Encoder(input_dim=dim_y, hidden_dim=n_a, num_layers=1, dropout_rate=dropout_rate)
-        self.one_step_attention = OneStepAttn(n_a, n_s, n_align)
+        self.one_step_attention = OneStepAttn(n_a, n_s, n_align, use_relu_energies=attention_relu)
 
         self.post_attn_cells = nn.ModuleList([
             nn.LSTMCell(input_size=n_a + n_a if i == 0 else n_s, hidden_size=n_s)
@@ -79,15 +80,22 @@ class MTMFSeq2One(nn.Module):
 class MTMFSeq2OneLightning(pl.LightningModule):
     def __init__(self, dim_x, dim_y, learning_rate, weight_decay, alpha, num_layers,
                  n_a=4, n_s=8, n_align=4, fc_x=4, fc_y=4, dropout_rate=0.0,
-                 encoder_type="autoregressive", bidirectional=False):
+                 encoder_type="autoregressive", bidirectional=False,
+                 attention_relu=True, loss_fn="mse", huber_delta=1.0):
         super().__init__()
         self.save_hyperparameters()
         self.model = MTMFSeq2One(
             dim_x=dim_x, dim_y=dim_y, num_layers=num_layers,
             n_a=n_a, n_s=n_s, n_align=n_align, fc_x=fc_x, fc_y=fc_y, dropout_rate=dropout_rate,
             encoder_type=encoder_type, bidirectional=bidirectional,
+            attention_relu=attention_relu,
         )
-        self.criterion = torch.nn.MSELoss()
+        if loss_fn == "mse":
+            self.criterion = torch.nn.MSELoss()
+        elif loss_fn == "huber":
+            self.criterion = torch.nn.HuberLoss(delta=huber_delta)
+        else:
+            raise ValueError(f"loss_fn must be 'mse' or 'huber', got {loss_fn!r}")
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.alpha = alpha

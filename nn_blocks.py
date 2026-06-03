@@ -56,12 +56,17 @@ class PreAttnEncoder(nn.Module):
 
     If bidirectional=True, a linear projection squashes the 2*hidden_dim LSTM output
     back to hidden_dim so downstream attention's input dim is independent of
-    direction choice."""
-    def __init__(self, input_dim, hidden_dim, dropout_rate=0.0, bidirectional=False):
+    direction choice.
+
+    num_layers parametrizes the LSTM depth so a search can compare 1/2/3 layers
+    on the same footing as the autoregressive Encoder. Default 1 preserves
+    backwards compatibility with v1 checkpoints."""
+    def __init__(self, input_dim, hidden_dim, num_layers=1, dropout_rate=0.0, bidirectional=False):
         super(PreAttnEncoder, self).__init__()
         self.bidirectional = bidirectional
         self.lstm = nn.LSTM(
             input_size=input_dim, hidden_size=hidden_dim,
+            num_layers=num_layers, dropout=dropout_rate if num_layers > 1 else 0.0,
             batch_first=True, bidirectional=bidirectional,
         )
         self.dropout = nn.Dropout(dropout_rate)
@@ -90,17 +95,25 @@ class PreAttnEncoder(nn.Module):
 class OneStepAttn(nn.Module):
     """Attention alignment module. Accepts an optional mask of shape [B, Lx];
     positions where mask is False are excluded from the softmax via -inf energies.
-    If a window is entirely masked, returns zero context."""
-    def __init__(self, n_a, n_s, n_align):
+    If a window is entirely masked, returns zero context.
+
+    use_relu_energies defaults to True for backwards compat with v1 checkpoints,
+    where energies were ReLU-clamped before softmax (atypical for Bahdanau and
+    likely harmful — clamps negative scores to identical zeros). New v2 runs
+    should set this to False for standard Bahdanau attention."""
+    def __init__(self, n_a, n_s, n_align, use_relu_energies=True):
         super(OneStepAttn, self).__init__()
         self.densor1 = nn.Linear(n_a + n_s, n_align)
         self.densor2 = nn.Linear(n_align, 1)
+        self.use_relu_energies = use_relu_energies
 
     def forward(self, a, s_prev, mask=None):
         s_prev = s_prev.unsqueeze(1).repeat(1, a.size(1), 1)
         concat = torch.cat((a, s_prev), dim=-1)
         e = torch.tanh(self.densor1(concat))
-        energies = F.relu(self.densor2(e))
+        energies = self.densor2(e)
+        if self.use_relu_energies:
+            energies = F.relu(energies)
         if mask is not None:
             energies = energies.masked_fill(~mask.unsqueeze(-1), float('-inf'))
         alphas = F.softmax(energies, dim=1)

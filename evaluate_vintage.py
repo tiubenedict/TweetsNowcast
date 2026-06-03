@@ -38,6 +38,7 @@ def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckp
             dropout_rate=config.get('dropout_rate', 0.0),
             encoder_type=config.get('encoder_type', 'autoregressive'),
             bidirectional=config.get('bidirectional', False),
+            attention_relu=config.get('attention_relu', True),
         ),
     )
     lightning_model = lightning_model.to(device)
@@ -88,6 +89,7 @@ def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckp
             dropout_rate=config.get('dropout_rate', 0.0),
             encoder_type=config.get('encoder_type', 'autoregressive'),
             bidirectional=config.get('bidirectional', False),
+            attention_relu=config.get('attention_relu', True),
         ),
     )
     lightning_model = lightning_model.to(device)

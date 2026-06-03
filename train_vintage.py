@@ -19,6 +19,9 @@ def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path
         dropout_rate=config.get('dropout_rate', 0.0),
         encoder_type=config.get('encoder_type', 'autoregressive'),
         bidirectional=config.get('bidirectional', False),
+        attention_relu=config.get('attention_relu', True),
+        loss_fn=config.get('loss_fn', 'mse'),
+        huber_delta=config.get('huber_delta', 1.0),
     )
     if task == "singletask":
         model = STMFSeq2OneLightning(
