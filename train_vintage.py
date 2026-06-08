@@ -10,7 +10,8 @@ from data_utils import get_dataloader_for_vintage
 
 def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path=None, logger_enabled=False, device='cpu', train_bias=False, walk_n=2):
     pl.seed_everything(42, workers=True)
-    train_loader, val_loader, _,_,_ = get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair=kmpair, data_window = config['data_window'], task=task, train_bias=train_bias, walk_n=walk_n)
+    imputation = config.get('imputation', 'legacy')
+    train_loader, val_loader, _,_,_ = get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair=kmpair, data_window = config['data_window'], task=task, train_bias=train_bias, walk_n=walk_n, imputation=imputation)
     # Architecture knobs — read from config with defaults matching historical fixed values.
     arch_kwargs = dict(
         n_a=config.get('n_a', 4),
@@ -22,6 +23,7 @@ def train_model(config, vintage, with_econ, with_tweets, kmpair, task, ckpt_path
         attention_relu=config.get('attention_relu', True),
         loss_fn=config.get('loss_fn', 'mse'),
         huber_delta=config.get('huber_delta', 1.0),
+        imputation=imputation,
     )
     if task == "singletask":
         model = STMFSeq2OneLightning(
