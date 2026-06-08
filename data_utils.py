@@ -83,11 +83,18 @@ def sliding_windows_ST(df, seq_length, train=True, freq_ratio = 3):
             data = pd.DataFrame(data_np, columns=columns if columns is not None else data.columns)
         return data
     if train:
-        for i in range(0,len(df)-seq_length, freq_ratio):
+        # Loop bound ensures _x_in always has the full seq_length+freq_ratio rows
+        # (pandas iloc silently truncates past the end → inhomogeneous shapes
+        # at np.array time). Originally masked by dropna shortening the matrix.
+        for i in range(0, len(df) - seq_length - freq_ratio + 1, freq_ratio):
             _x_in = df.iloc[i:(i+seq_length+freq_ratio),1:] ## 15 months length, skips every 3 rows
             _y_in = df.iloc[i+freq_ratio-1:i+seq_length:freq_ratio, :1] ## gets every rth (3rd) row but stops before the current low-freq/quarter vintage
             # _x_out = df.iloc[i+seq_length, 1:] ## < 16th month x?
             _y_out = df.iloc[i+freq_ratio-1:i+seq_length+freq_ratio:freq_ratio, :1] ## < final low freq/quarter vintage
+            # Skip windows where Y is missing — necessary when data isn't pre-dropna'd (i1/i2 imputation modes).
+            # No-op when data has been dropna'd (legacy path).
+            if _y_in.isna().any().any() or _y_out.isna().any().any():
+                continue
             data_length_y = seq_length // freq_ratio + 1
             _y_in = pad_nans(_y_in, data_length_y, columns=df.columns[:1])
             x_encoder_in.append(_x_in)
@@ -148,7 +155,8 @@ def sliding_windows_MT(df, seq_length, train=True, freq_ratio = 3):
         return data
     if train:
         # print(len(df)-seq_length)
-        for i in range(0,len(df)-seq_length):
+        # Loop bound ensures slices stay within data (originally masked by dropna).
+        for i in range(0, len(df) - seq_length - freq_ratio + 1):
             month_idx = (df.iloc[[i+seq_length]].index[0].month - 1) % 3
             steps = 3 - month_idx
             # print("i:", i, "month_idx: ", month_idx, " steps: ", steps)
@@ -159,10 +167,16 @@ def sliding_windows_MT(df, seq_length, train=True, freq_ratio = 3):
             _y_in = df.iloc[i+steps-1:i+seq_length:freq_ratio, :1]              ## gets every rth (3rd) row but stops before the current low-freq/quarter vintage
             _x_out = df.iloc[i-month_idx:i+seq_length+freq_ratio-month_idx, 1:] ## < 13th to 15th month
             _y_out = df.iloc[i+steps-1:i+seq_length+steps:freq_ratio, :1]       ## < Next period low freq / (Q5) quarter vintage
+            # Skip windows where Y is missing — necessary when data isn't pre-dropna'd (i1/i2 imputation modes).
+            # No-op when data has been dropna'd (legacy path).
+            if _y_in.isna().any().any() or _y_out.isna().any().any():
+                continue
             data_length_x = seq_length + freq_ratio
             _x_in = pad_nans(_x_in, data_length_x, columns=df.columns[1:])
+            _x_out = pad_nans(_x_out, data_length_x, columns=df.columns[1:])
             data_length_y = seq_length // freq_ratio + 1
             _y_in = pad_nans(_y_in, data_length_y, columns=df.columns[:1])
+            _y_out = pad_nans(_y_out, data_length_y, columns=df.columns[:1])
             # display(_x_in)
             # display(_y_in)
             # display(_x_out)
@@ -187,10 +201,16 @@ def sliding_windows_MT(df, seq_length, train=True, freq_ratio = 3):
 
     return torch.tensor(np.array(x_encoder_in), dtype=torch.float32), torch.tensor(np.array(y_encoder_in), dtype=torch.float32), torch.tensor(np.array(x_target), dtype=torch.float32), torch.tensor(np.array(y_target), dtype=torch.float32)
 
-def get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair, data_window, task, mode="train", train_bias=False, walk_n=2):
+def get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair, data_window, task, mode="train", train_bias=False, walk_n=2, imputation="legacy"):
     data_model = NowcastingLSTM_MQ()
     data, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target='PHL_GDP_SA')
-    data = data.dropna()
+    # Imputation mode controls how NaN tails are handled:
+    #   "legacy"  : drop NaN rows; encoder never sees NaN. DFM imputation is applied at inference only (in evaluate_vintage).
+    #   "i1_pc"   : keep NaN rows; modified Encoder uses PredictionCell on fully-NaN tail + zero-fill on partial-NaN.
+    #   "i2_attn" : keep NaN rows; modified PreAttnEncoder zero-fills NaN and masks the fully-NaN trailing positions.
+    if imputation == "legacy":
+        data = data.dropna()
+    # Else: keep NaN tail; the encoder handles it. Sliding-window NaN-Y filter prevents NaN targets.
     # Forward-walk split:
     #   train_bias=False (default): drop last walk_n*3 rows so the last walk_n quarters are held out of training.
     #                               Validation last-1 target lands on the most recent observed quarter.
