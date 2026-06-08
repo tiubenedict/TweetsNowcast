@@ -25,23 +25,24 @@ class MTMFSeq2One(nn.Module):
     def __init__(self, dim_x, dim_y, num_layers=1, n_a=4, n_s=8, n_align=4, fc_x=4, fc_y=4,
                  dropout_rate=0.0, freq_ratio=3,
                  encoder_type="autoregressive", bidirectional=False,
-                 attention_relu=True):
+                 attention_relu=True, imputation="legacy"):
         super(MTMFSeq2One, self).__init__()
         self.n_s = n_s
         self.num_layers = num_layers
         self.freq_ratio = freq_ratio
         self.encoder_type = encoder_type
+        partial_aware = imputation in ("i1_pc", "i2_attn")
 
         if encoder_type == "autoregressive":
-            self.encoder_x = Encoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate)
+            self.encoder_x = Encoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate, partial_aware=partial_aware)
         elif encoder_type == "pre_attn":
-            self.encoder_x = PreAttnEncoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate, bidirectional=bidirectional)
+            self.encoder_x = PreAttnEncoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate, bidirectional=bidirectional, partial_aware=partial_aware)
         else:
             raise ValueError(f"encoder_type must be 'autoregressive' or 'pre_attn', got {encoder_type!r}")
 
         self.decoder_x = Decoder(n_latent=n_a, dim=dim_x, hidden_dim=fc_x)
         # y-encoder stays autoregressive (see STMFSeq2One note).
-        self.encoder_y = Encoder(input_dim=dim_y, hidden_dim=n_a, num_layers=1, dropout_rate=dropout_rate)
+        self.encoder_y = Encoder(input_dim=dim_y, hidden_dim=n_a, num_layers=1, dropout_rate=dropout_rate, partial_aware=partial_aware)
         self.one_step_attention = OneStepAttn(n_a, n_s, n_align, use_relu_energies=attention_relu)
 
         self.post_attn_cells = nn.ModuleList([
@@ -81,14 +82,15 @@ class MTMFSeq2OneLightning(pl.LightningModule):
     def __init__(self, dim_x, dim_y, learning_rate, weight_decay, alpha, num_layers,
                  n_a=4, n_s=8, n_align=4, fc_x=4, fc_y=4, dropout_rate=0.0,
                  encoder_type="autoregressive", bidirectional=False,
-                 attention_relu=True, loss_fn="mse", huber_delta=1.0):
+                 attention_relu=True, loss_fn="mse", huber_delta=1.0,
+                 imputation="legacy"):
         super().__init__()
         self.save_hyperparameters()
         self.model = MTMFSeq2One(
             dim_x=dim_x, dim_y=dim_y, num_layers=num_layers,
             n_a=n_a, n_s=n_s, n_align=n_align, fc_x=fc_x, fc_y=fc_y, dropout_rate=dropout_rate,
             encoder_type=encoder_type, bidirectional=bidirectional,
-            attention_relu=attention_relu,
+            attention_relu=attention_relu, imputation=imputation,
         )
         if loss_fn == "mse":
             self.criterion = torch.nn.MSELoss()
@@ -104,10 +106,19 @@ class MTMFSeq2OneLightning(pl.LightningModule):
     def forward(self, x_encoder_in, y_encoder_in):
         return self.model(x_encoder_in, y_encoder_in)
 
+    def _masked_criterion(self, pred, target):
+        """MSE/Huber over non-NaN positions of target. When all positions are NaN,
+        returns zero (no gradient contribution). Used for x-reconstruction loss
+        under i1/i2 imputation modes where x_target can contain NaN."""
+        mask = ~target.isnan()
+        if mask.sum() == 0:
+            return torch.zeros((), device=pred.device, dtype=pred.dtype)
+        return self.criterion(pred[mask], target[mask])
+
     def training_step(self, batch, batch_idx):
         x_encoder_in, y_encoder_in, x_target, y_target = batch
         x_pred, y_pred = self(x_encoder_in, y_encoder_in)
-        loss_x = self.criterion(x_pred, x_target)
+        loss_x = self._masked_criterion(x_pred, x_target)
         loss_y = self.criterion(y_pred, y_target)
         loss = loss_x + self.alpha * loss_y
         self.log("train_loss", loss, on_epoch=True, prog_bar=True)
@@ -116,7 +127,7 @@ class MTMFSeq2OneLightning(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x_encoder_in, y_encoder_in, x_target, y_target = batch
         x_pred, y_pred = self(x_encoder_in, y_encoder_in)
-        loss_x = self.criterion(x_pred[:, -self.freq_ratio:, :], x_target[:, -self.freq_ratio:, :])
+        loss_x = self._masked_criterion(x_pred[:, -self.freq_ratio:, :], x_target[:, -self.freq_ratio:, :])
         loss_y = self.criterion(y_pred[:, -1:, :], y_target[:, -1:, :])
         loss = loss_x + loss_y
         self.log("val_loss_x", loss_x, on_epoch=True, prog_bar=True)
