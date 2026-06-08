@@ -7,8 +7,11 @@ from MTSeq2One import MTMFSeq2One, MTMFSeq2OneLightning
 def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckpt_path, config, device="cpu"):
     ### Train Scaler + Backcast/Test Data
     data_model = NowcastingLSTM_MQ()
+    imputation = config.get('imputation', 'legacy') if isinstance(config, dict) else 'legacy'
+    # DFM extension only in legacy mode. i1/i2 modes let the LSTM encoder handle NaN tails directly.
+    extend_at_infer = (imputation == 'legacy')
     _, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target=target)
-    test_data, _, _, _ = data_model.load_data(vintage=vintage, window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=False, extend=True, DFM_order=(1,0,1,0), optimize_order = False, target=target)
+    test_data, _, _, _ = data_model.load_data(vintage=vintage, window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=False, extend=extend_at_infer, DFM_order=(1,0,1,0), optimize_order = False, target=target)
     test_data = test_data.loc[vintage + relativedelta(months = -((vintage.month - 1) % 3) - config['data_window'] - (3 if vintage.month % 3 == 1 else 0), day=31):,:] # get first month of same qtr last year, but get final day. Extend one quarter if first month of quarter.
     test_data.iloc[:,:1] = target_scaler.transform(test_data.iloc[:,:1])
     if with_econ and with_tweets:
@@ -39,6 +42,7 @@ def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckp
             encoder_type=config.get('encoder_type', 'autoregressive'),
             bidirectional=config.get('bidirectional', False),
             attention_relu=config.get('attention_relu', True),
+            imputation=imputation,
         ),
     )
     lightning_model = lightning_model.to(device)
@@ -57,6 +61,7 @@ def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckp
 def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckpt_path, config, device="cpu"):
     ### Train Scaler + Backcast/Test Data
     data_model = NowcastingLSTM_MQ()
+    imputation = config.get('imputation', 'legacy') if isinstance(config, dict) else 'legacy'
     _, target_scaler, econ_scaler, tweets_scaler = data_model.load_data(vintage=vintage,window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=True, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target=target)
     test_data, _, _, _ = data_model.load_data(vintage=vintage, window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=True,scaled=False, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target=target)
     test_data = test_data.loc[vintage + relativedelta(months = -((vintage.month - 1) % 3) - config['data_window'] - (3 if vintage.month % 3 == 1 else 0), day=31):,:] # get first month of same qtr last year, but get final day. Extend one quarter if first month of quarter.
@@ -90,6 +95,7 @@ def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckp
             encoder_type=config.get('encoder_type', 'autoregressive'),
             bidirectional=config.get('bidirectional', False),
             attention_relu=config.get('attention_relu', True),
+            imputation=imputation,
         ),
     )
     lightning_model = lightning_model.to(device)
