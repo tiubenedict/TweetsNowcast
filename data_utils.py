@@ -219,7 +219,20 @@ def get_dataloader_for_vintage(vintage, with_econ, with_tweets, kmpair, data_win
     #   train_bias=True: include everything in training (leaky; explicit opt-in for comparison runs only).
     drop = walk_n * 3
     train_data = data.iloc[:] if train_bias else data.iloc[:-drop]
-    val_data = data.iloc[-data_window-drop:]
+    if imputation == "legacy":
+        val_data = data.iloc[-data_window-drop:]
+    else:
+        # i1/i2: data extends beyond the latest released quarter (NaN target tail).
+        # Trim that tail before slicing val_data, otherwise every stride-3 val
+        # window's _y_out lands on a NaN-target row → all windows get filtered
+        # → empty val_loader → ReduceLROnPlateau fails to find val_loss_y.
+        # Legacy's dropna had this effect implicitly.
+        target_col = data.columns[0]
+        last_valid = data[target_col].last_valid_index()
+        if last_valid is not None:
+            val_data = data.loc[:last_valid].iloc[-data_window-drop:]
+        else:
+            val_data = data.iloc[-data_window-drop:]
     # val_data, _, _, _ = data_model.load_data(vintage=vintage+pd.offsets.QuarterEnd(0)+pd.DateOffset(months=2),window=1000, kmpair=kmpair, with_econ=with_econ, with_tweets=with_tweets, target_release_lag=False, scaled=False, extend=False, DFM_order=(1,0,1,0), optimize_order = False, target='PHL_GDP_SA')
     # val_data = val_data.dropna().iloc[-data_window-3:]
     # val_data.iloc[:,:1] = target_scaler.transform(val_data.iloc[:,:1])
