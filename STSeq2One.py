@@ -12,23 +12,28 @@ class STMFSeq2One(nn.Module):
     def __init__(self, dim_x, dim_y, num_layers, n_a=4, n_s=8, n_align=4, fc_y=4,
                  dropout_rate=0, freq_ratio=3,
                  encoder_type="autoregressive", bidirectional=False,
-                 attention_relu=True):
+                 attention_relu=True, imputation="legacy"):
         super(STMFSeq2One, self).__init__()
         self.n_s = n_s
         self.num_layers = num_layers
         self.freq_ratio = freq_ratio
         self.encoder_type = encoder_type
+        # i1_pc / i2_attn → partial_aware=True (Encoder/PreAttnEncoder use new
+        # fully-NaN-trailing logic). Legacy → partial_aware=False (preserves
+        # exact behavior of pre-i1 checkpoints at inference).
+        partial_aware = imputation in ("i1_pc", "i2_attn")
 
         if encoder_type == "autoregressive":
-            self.encoder_x = Encoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate)
+            self.encoder_x = Encoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate, partial_aware=partial_aware)
         elif encoder_type == "pre_attn":
-            self.encoder_x = PreAttnEncoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate, bidirectional=bidirectional)
+            self.encoder_x = PreAttnEncoder(input_dim=dim_x, hidden_dim=n_a, num_layers=num_layers, dropout_rate=dropout_rate, bidirectional=bidirectional, partial_aware=partial_aware)
         else:
             raise ValueError(f"encoder_type must be 'autoregressive' or 'pre_attn', got {encoder_type!r}")
 
         # y-encoder stays autoregressive: y (quarterly target) has its own ragged-tail
-        # to impute, and the direction knob is for x's encoder only.
-        self.encoder_y = Encoder(input_dim=dim_y, hidden_dim=n_a, num_layers=1, dropout_rate=dropout_rate)
+        # to impute, and the direction knob is for x's encoder only. y rarely has
+        # partial NaN (it's 1-dim) so partial_aware doesn't matter for it.
+        self.encoder_y = Encoder(input_dim=dim_y, hidden_dim=n_a, num_layers=1, dropout_rate=dropout_rate, partial_aware=partial_aware)
 
         self.one_step_attention = OneStepAttn(n_a, n_s, n_align, use_relu_energies=attention_relu)
 
@@ -74,14 +79,15 @@ class STMFSeq2OneLightning(pl.LightningModule):
     def __init__(self, dim_x, dim_y, learning_rate, weight_decay, num_layers,
                  n_a=4, n_s=8, n_align=4, fc_y=4, dropout_rate=0.0,
                  encoder_type="autoregressive", bidirectional=False,
-                 attention_relu=True, loss_fn="mse", huber_delta=1.0):
+                 attention_relu=True, loss_fn="mse", huber_delta=1.0,
+                 imputation="legacy"):
         super().__init__()
         self.save_hyperparameters()
         self.model = STMFSeq2One(
             dim_x=dim_x, dim_y=dim_y, num_layers=num_layers,
             n_a=n_a, n_s=n_s, n_align=n_align, fc_y=fc_y, dropout_rate=dropout_rate,
             encoder_type=encoder_type, bidirectional=bidirectional,
-            attention_relu=attention_relu,
+            attention_relu=attention_relu, imputation=imputation,
         )
         if loss_fn == "mse":
             self.criterion = torch.nn.MSELoss()
