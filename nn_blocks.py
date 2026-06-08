@@ -20,31 +20,57 @@ class PredictionCell(nn.Module):
 
 
 class Encoder(nn.Module):
-    """Autoregressive encoder: LSTM on non-NaN prefix, PredictionCell fills the
-    NaN tail. Every output position is treated as valid by downstream attention
-    (the returned mask is all-True) since the encoder itself has imputed the tail."""
-    def __init__(self, input_dim, hidden_dim, num_layers, dropout_rate):
+    """Autoregressive encoder.
+
+    `partial_aware` controls how NaN rows are handled:
+      - False (legacy default): any row containing NaN is treated as part of the
+        trailing-missing block. latent_map sees only the prefix of fully-observed
+        rows; PredictionCell autoregresses through the entire any-NaN suffix.
+        Preserves exact behavior of pre-i1 checkpoints.
+      - True (i1 mode): rows with at least one real feature go through latent_map
+        with NaN columns zero-filled. Only fully-NaN trailing rows go through
+        PredictionCell. Lets partial-month real data inform the latent."""
+    def __init__(self, input_dim, hidden_dim, num_layers, dropout_rate, partial_aware=False):
         super(Encoder, self).__init__()
         self.latent_map = nn.LSTM(input_dim, hidden_dim, num_layers=num_layers, batch_first=True, dropout=dropout_rate)
         self.prediction_cell = PredictionCell(hidden_dim, num_layers=num_layers, dropout_rate=dropout_rate)
+        self.hidden_dim = hidden_dim
+        self.partial_aware = partial_aware
 
     def forward(self, x):
-        n_missing = x.isnan().any(dim=2).sum(dim=1)
         seq_len = x.size(1)
         batch_size = x.size(0)
-        latents = []
+
+        if self.partial_aware:
+            # Trailing block = consecutive fully-NaN rows from the end.
+            fully_nan = x.isnan().all(dim=2)                          # [B, L]
+            rev = fully_nan.flip(dims=[1]).long()
+            n_trailing = rev.cumprod(dim=1).sum(dim=1)                # [B]
+        else:
+            # Legacy: any-NaN row counts toward the trailing missing block.
+            n_trailing = x.isnan().any(dim=2).sum(dim=1)              # [B]
+        body_len = seq_len - n_trailing                               # [B]
+
+        latents_out = []
         for idx in range(batch_size):
-            n_miss = n_missing[idx].item()
-            latent, _ = self.latent_map(x[idx:idx+1, :(seq_len - n_miss), :])
-            if n_miss == 0:
-                latents.append(latent)
-                continue
-            latent = latent.clone()
-            for i in range(n_miss):
-                updated = self.prediction_cell(latent[:, :(seq_len - n_miss + i), :])
-                latent = torch.cat([latent[:, :(seq_len - n_miss + i), :], updated.unsqueeze(1)], dim=1)
-            latents.append(latent)
-        latents = torch.cat(latents, dim=0)
+            bl = int(body_len[idx].item())
+            nt = int(n_trailing[idx].item())
+            if bl > 0:
+                # In partial_aware mode the body may contain partial-NaN rows;
+                # zero-fill them. In legacy mode the body is by construction
+                # fully-observed, so nan_to_num is a no-op there.
+                body = torch.nan_to_num(x[idx:idx+1, :bl, :], nan=0.0) if self.partial_aware else x[idx:idx+1, :bl, :]
+                latent, _ = self.latent_map(body)
+            else:
+                # All-NaN sample — seed with a zero latent and let PredictionCell autoregress.
+                latent = torch.zeros(1, 1, self.hidden_dim, device=x.device, dtype=x.dtype)
+                bl = 1
+                nt = max(0, nt - 1)
+            for i in range(nt):
+                updated = self.prediction_cell(latent[:, :(bl + i), :])
+                latent = torch.cat([latent[:, :(bl + i), :], updated.unsqueeze(1)], dim=1)
+            latents_out.append(latent)
+        latents = torch.cat(latents_out, dim=0)
         mask = torch.ones(latents.size(0), latents.size(1), dtype=torch.bool, device=latents.device)
         return latents, mask
 
@@ -58,12 +84,16 @@ class PreAttnEncoder(nn.Module):
     back to hidden_dim so downstream attention's input dim is independent of
     direction choice.
 
-    num_layers parametrizes the LSTM depth so a search can compare 1/2/3 layers
-    on the same footing as the autoregressive Encoder. Default 1 preserves
-    backwards compatibility with v1 checkpoints."""
-    def __init__(self, input_dim, hidden_dim, num_layers=1, dropout_rate=0.0, bidirectional=False):
+    `partial_aware` controls trailing-missing detection:
+      - False (legacy default): any row with any NaN counts toward the trailing
+        block. lengths = seq_len - (# any-NaN rows). Preserves pre-i2 checkpoints.
+      - True (i2 mode): only fully-NaN rows count. Partial-NaN rows stay in the
+        packed sequence with NaN columns zero-filled, so real columns inform
+        the latent."""
+    def __init__(self, input_dim, hidden_dim, num_layers=1, dropout_rate=0.0, bidirectional=False, partial_aware=False):
         super(PreAttnEncoder, self).__init__()
         self.bidirectional = bidirectional
+        self.partial_aware = partial_aware
         self.lstm = nn.LSTM(
             input_size=input_dim, hidden_size=hidden_dim,
             num_layers=num_layers, dropout=dropout_rate if num_layers > 1 else 0.0,
@@ -74,21 +104,25 @@ class PreAttnEncoder(nn.Module):
         self.out_proj = nn.Linear(lstm_out_dim, hidden_dim) if bidirectional else nn.Identity()
 
     def forward(self, x):
-        n_missing = x.isnan().any(dim=2).sum(dim=1)
-        lengths = x.size(1) - n_missing
-        # pack_padded_sequence requires lengths >= 1; clamp to protect against all-NaN samples.
-        lengths = torch.clamp(lengths, min=1)
+        seq_len = x.size(1)
+        if self.partial_aware:
+            fully_nan = x.isnan().all(dim=2)
+            rev = fully_nan.flip(dims=[1]).long()
+            n_trailing = rev.cumprod(dim=1).sum(dim=1)
+        else:
+            n_trailing = x.isnan().any(dim=2).sum(dim=1)
+        lengths = (seq_len - n_trailing).clamp(min=1)
         x_clean = torch.nan_to_num(x, nan=0.0)
         packed = nn.utils.rnn.pack_padded_sequence(
             x_clean, lengths.cpu(), batch_first=True, enforce_sorted=False,
         )
         packed_out, _ = self.lstm(packed)
         x_a, _ = nn.utils.rnn.pad_packed_sequence(
-            packed_out, batch_first=True, total_length=x.size(1),
+            packed_out, batch_first=True, total_length=seq_len,
         )
         x_a = self.dropout(x_a)
         x_a = self.out_proj(x_a)
-        mask = torch.arange(x.size(1), device=x.device)[None, :] < lengths[:, None]
+        mask = torch.arange(seq_len, device=x.device)[None, :] < lengths[:, None]
         return x_a, mask
 
 
