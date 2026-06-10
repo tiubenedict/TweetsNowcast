@@ -1,10 +1,22 @@
 import torch
+import lightning.pytorch as pl
 from dateutil.relativedelta import relativedelta
-from data_utils import sliding_windows_ST, sliding_windows_MT, NowcastingLSTM_MQ
+from data_utils import sliding_windows_ST, sliding_windows_MT, NowcastingLSTM_MQ, get_dataloader_for_vintage
 from STSeq2One import STMFSeq2One, STMFSeq2OneLightning
 from MTSeq2One import MTMFSeq2One, MTMFSeq2OneLightning
 
-def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckpt_path, config, device="cpu"):
+
+def _make_refit_trainer(epochs, device):
+    """Trainer for stage-2 refit: trains on all data, no validation loop, no checkpointing."""
+    return pl.Trainer(
+        max_epochs=epochs, deterministic=True, accelerator=device,
+        enable_progress_bar=False, enable_model_summary=False, logger=False,
+        num_sanity_val_steps=0, enable_checkpointing=False,
+    )
+
+
+def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckpt_path, config, device="cpu",
+                            refit=False, refit_epochs=None):
     ### Train Scaler + Backcast/Test Data
     data_model = NowcastingLSTM_MQ()
     imputation = config.get('imputation', 'legacy') if isinstance(config, dict) else 'legacy'
@@ -30,11 +42,19 @@ def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckp
     testX_in = torch.Tensor(x_encoder_in)#.to(device)
     testY_in = torch.Tensor(y_decoder_in)#.to(device)
 
-    # lightning_model = MTMFSeq2OneLightning.load_from_checkpoint(checkpoint_path=f"lightning_logs/version{version}/checkpoints/model.ckpt", model=model) # checkpoints/vintage_{vintage}/model{version}.ckpt
-    lightning_model = STMFSeq2OneLightning.load_from_checkpoint(
-        checkpoint_path=ckpt_path,
-        model=STMFSeq2One(
+    if refit:
+        # Stage-2: retrain the winning config on ALL released quarters (train_bias=True),
+        # for refit_epochs (the stage-1 best epoch). No val loop — refit_mode points the
+        # LR scheduler at train_loss. Replaces the frozen stage-1 checkpoint.
+        pl.seed_everything(42, workers=True)
+        train_loader, _, _, _, _ = get_dataloader_for_vintage(
+            vintage, with_econ, with_tweets, kmpair=kmpair,
+            data_window=config['data_window'], task='singletask',
+            train_bias=True, imputation=imputation,
+        )
+        lightning_model = STMFSeq2OneLightning(
             dim_x=testX_in.shape[-1], dim_y=testY_in.shape[-1],
+            learning_rate=config['learning_rate'], weight_decay=config['weight_decay'],
             num_layers=config['num_layers'],
             n_a=config.get('n_a', 4), n_s=config.get('n_s', 8),
             n_align=config.get('n_align', 4), fc_y=config.get('fc_y', 4),
@@ -42,9 +62,25 @@ def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckp
             encoder_type=config.get('encoder_type', 'autoregressive'),
             bidirectional=config.get('bidirectional', False),
             attention_relu=config.get('attention_relu', True),
-            imputation=imputation,
-        ),
-    )
+            loss_fn=config.get('loss_fn', 'mse'), huber_delta=config.get('huber_delta', 1.0),
+            imputation=imputation, refit_mode=True,
+        )
+        _make_refit_trainer(refit_epochs or config.get('epochs', 150), device).fit(lightning_model, train_loader)
+    else:
+        lightning_model = STMFSeq2OneLightning.load_from_checkpoint(
+            checkpoint_path=ckpt_path,
+            model=STMFSeq2One(
+                dim_x=testX_in.shape[-1], dim_y=testY_in.shape[-1],
+                num_layers=config['num_layers'],
+                n_a=config.get('n_a', 4), n_s=config.get('n_s', 8),
+                n_align=config.get('n_align', 4), fc_y=config.get('fc_y', 4),
+                dropout_rate=config.get('dropout_rate', 0.0),
+                encoder_type=config.get('encoder_type', 'autoregressive'),
+                bidirectional=config.get('bidirectional', False),
+                attention_relu=config.get('attention_relu', True),
+                imputation=imputation,
+            ),
+        )
     lightning_model = lightning_model.to(device)
     lightning_model.eval()
     with torch.no_grad():
@@ -58,7 +94,8 @@ def evaluate_one_vintage_ST(vintage, with_econ, with_tweets, kmpair, target, ckp
         nowcastY = target_scaler.inverse_transform(nowcastY[0].cpu().numpy())
     return (vintage, nowcastY.flatten()[-1])
 
-def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckpt_path, config, device="cpu"):
+def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckpt_path, config, device="cpu",
+                            refit=False, refit_epochs=None):
     ### Train Scaler + Backcast/Test Data
     data_model = NowcastingLSTM_MQ()
     imputation = config.get('imputation', 'legacy') if isinstance(config, dict) else 'legacy'
@@ -82,12 +119,18 @@ def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckp
     testX_in = torch.Tensor(x_encoder_in)#.to(device)
     testY_in = torch.Tensor(y_decoder_in)#.to(device)
 
-    # lightning_model = MTMFSeq2OneLightning.load_from_checkpoint(checkpoint_path=f"lightning_logs/version{version}/checkpoints/model.ckpt", model=model) # checkpoints/vintage_{vintage}/model{version}.ckpt
-    lightning_model = MTMFSeq2OneLightning.load_from_checkpoint(
-        checkpoint_path=ckpt_path,
-        model=MTMFSeq2One(
+    if refit:
+        # Stage-2: retrain winning config on all released quarters (train_bias=True).
+        pl.seed_everything(42, workers=True)
+        train_loader, _, _, _, _ = get_dataloader_for_vintage(
+            vintage, with_econ, with_tweets, kmpair=kmpair,
+            data_window=config['data_window'], task='multitask',
+            train_bias=True, imputation=imputation,
+        )
+        lightning_model = MTMFSeq2OneLightning(
             dim_x=testX_in.shape[-1], dim_y=testY_in.shape[-1],
-            num_layers=config['num_layers'],
+            learning_rate=config['learning_rate'], weight_decay=config['weight_decay'],
+            alpha=config['alpha'], num_layers=config['num_layers'],
             n_a=config.get('n_a', 4), n_s=config.get('n_s', 8),
             n_align=config.get('n_align', 4),
             fc_x=config.get('fc_x', 4), fc_y=config.get('fc_y', 4),
@@ -95,9 +138,26 @@ def evaluate_one_vintage_MT(vintage, with_econ, with_tweets, kmpair, target, ckp
             encoder_type=config.get('encoder_type', 'autoregressive'),
             bidirectional=config.get('bidirectional', False),
             attention_relu=config.get('attention_relu', True),
-            imputation=imputation,
-        ),
-    )
+            loss_fn=config.get('loss_fn', 'mse'), huber_delta=config.get('huber_delta', 1.0),
+            imputation=imputation, refit_mode=True,
+        )
+        _make_refit_trainer(refit_epochs or config.get('epochs', 150), device).fit(lightning_model, train_loader)
+    else:
+        lightning_model = MTMFSeq2OneLightning.load_from_checkpoint(
+            checkpoint_path=ckpt_path,
+            model=MTMFSeq2One(
+                dim_x=testX_in.shape[-1], dim_y=testY_in.shape[-1],
+                num_layers=config['num_layers'],
+                n_a=config.get('n_a', 4), n_s=config.get('n_s', 8),
+                n_align=config.get('n_align', 4),
+                fc_x=config.get('fc_x', 4), fc_y=config.get('fc_y', 4),
+                dropout_rate=config.get('dropout_rate', 0.0),
+                encoder_type=config.get('encoder_type', 'autoregressive'),
+                bidirectional=config.get('bidirectional', False),
+                attention_relu=config.get('attention_relu', True),
+                imputation=imputation,
+            ),
+        )
     lightning_model = lightning_model.to(device)
     lightning_model.eval()
     with torch.no_grad():

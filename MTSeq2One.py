@@ -83,7 +83,7 @@ class MTMFSeq2OneLightning(pl.LightningModule):
                  n_a=4, n_s=8, n_align=4, fc_x=4, fc_y=4, dropout_rate=0.0,
                  encoder_type="autoregressive", bidirectional=False,
                  attention_relu=True, loss_fn="mse", huber_delta=1.0,
-                 imputation="legacy"):
+                 imputation="legacy", refit_mode=False):
         super().__init__()
         self.save_hyperparameters()
         self.model = MTMFSeq2One(
@@ -141,9 +141,12 @@ class MTMFSeq2OneLightning(pl.LightningModule):
             lr=self.hparams.learning_rate,
             weight_decay=self.hparams.weight_decay
         )
+        # In refit_mode there is no validation loop (stage-2 trains on all data),
+        # so the plateau scheduler watches train_loss instead of val_loss_y.
+        monitor = "train_loss" if self.hparams.get("refit_mode", False) else "val_loss_y"
         scheduler = {
             "scheduler": lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-5),
-            "monitor": "val_loss_y",
+            "monitor": monitor,
             "interval": "epoch",
             "frequency": 1
         }
