@@ -155,8 +155,14 @@ def sliding_windows_MT(df, seq_length, train=True, freq_ratio = 3):
         return data
     if train:
         # print(len(df)-seq_length)
-        # Loop bound ensures slices stay within data (originally masked by dropna).
-        for i in range(0, len(df) - seq_length - freq_ratio + 1):
+        # Bound = largest i with a valid df.index[i+seq_length] reference month.
+        # Earlier `- freq_ratio + 1` was over-conservative: it reserved the full
+        # freq_ratio look-ahead for EVERY window, so the most-recent quarter kept
+        # only its M1-reference window and lost the M2/M3 vintages (whose targets
+        # are present). pad_nans + the NaN-_y_out filter below already drop any
+        # window that genuinely needs absent future data, so this looser bound is
+        # safe and makes validation symmetric (3 vintages per held-out quarter).
+        for i in range(0, len(df) - seq_length):
             month_idx = (df.iloc[[i+seq_length]].index[0].month - 1) % 3
             steps = 3 - month_idx
             # print("i:", i, "month_idx: ", month_idx, " steps: ", steps)
